@@ -1,0 +1,71 @@
+{
+  "name": "tenant-kit",
+  "version": "0.1.0",
+  "description": "Multi-tenancy as a library — tenant identity, membership, resolution and isolation for the app you already run.",
+  "license": "Apache-2.0",
+  "author": "BRETT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+http://localhost:3003/brett/tenant-kit.git"
+  },
+  "homepage": "http://localhost:3003/brett/tenant-kit#readme",
+  "bugs": {
+    "url": "http://localhost:3003/brett/tenant-kit/issues"
+  },
+  "keywords": [
+    "multi-tenancy",
+    "multitenant",
+    "tenant",
+    "saas",
+    "row-level-security",
+    "rls",
+    "organizations",
+    "memberships",
+    "postgres",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "exports": {
+    ".": {
+      "types": {
+        "import": "./dist/index.d.ts",
+        "require": "./dist/index.d.cts"
+      },
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./sql/*": "./sql/*",
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "sql",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.21.0",
+    "pg": "^8.23.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+
+    // Same stance as billing-kit: both `./types` and `./types.ts` are legal
+    // specifiers, so reviews do not litigate the style. `noEmit` is set, which
+    // this flag requires; tsup does the emitting.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "test", "tsup.config.ts"]
+}
