@@ -86,6 +86,13 @@ defends a piece of it:
   which consumes the `tenantId` this library produces. Neither imports the
   other.
 
+The systems on the other side of that line plug in through
+[tenant-kit-adapters](http://localhost:3003/brett/tenant-kit-adapters):
+enterprise SSO over any OIDC IdP (per-tenant connections, group→role
+mapping, JIT provisioning), SCIM 2.0 directory provisioning, and
+role-mirroring bridges into RBAC engines like OpenFGA — each one an adapter
+conforming to a small contract, none of them moving the scope line.
+
 ## Quickstart
 
 ```sh
