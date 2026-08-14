@@ -96,7 +96,7 @@ conforming to a small contract, none of them moving the scope line.
 ## Quickstart
 
 ```sh
-pnpm add tenant-kit
+pnpm add @quxkit/tenant-kit
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/002_rls.sql
 ```
@@ -106,7 +106,7 @@ Wire it to any `pg.Pool` (the ~10-line adapter is in
 executor too):
 
 ```ts
-import { createTenancy, firstOf, fromSubdomain, fromHeader } from 'tenant-kit';
+import { createTenancy, firstOf, fromSubdomain, fromHeader } from '@quxkit/tenant-kit';
 
 const tenancy = createTenancy({ db });
 
