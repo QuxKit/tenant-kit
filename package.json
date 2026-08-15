@@ -58,7 +58,7 @@
     "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "restricted"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
