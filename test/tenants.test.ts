@@ -8,7 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { TenancyError } from '../src/errors';
 import { createTenancy, type Tenancy } from '../src/instance';
 import { validateSlug } from '../src/tenants';
-import { SKIP_REASON, setupDatabase, type Harness } from './pg-executor';
+import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
 
 const NOW = new Date('2026-08-14T12:00:00Z');
 
@@ -25,7 +25,8 @@ describe('validateSlug', () => {
     ] as const) {
       assert.throws(
         () => validateSlug(slug),
-        (e: unknown) => TenancyError.hasCode(e, 'invalid_slug') && e.failure.reason.includes(reason.slice(0, 5)),
+        (e: unknown) =>
+          TenancyError.hasCode(e, 'invalid_slug') && e.failure.reason.includes(reason.slice(0, 5)),
         `slug ${JSON.stringify(slug)}`,
       );
     }
@@ -41,8 +42,7 @@ describe('tenants', { skip: false }, () => {
     harness = await setupDatabase();
     if (harness !== null) tenancy = createTenancy({ db: harness.db, clock: () => NOW });
   });
-  after(async () =>
-    harness?.close());
+  after(async () => harness?.close());
 
   it('creates, and creating again with identical input is the same tenant', async (t) => {
     if (harness === null) return t.skip(SKIP_REASON);
@@ -78,9 +78,8 @@ describe('tenants', { skip: false }, () => {
     const tenant = await tenancy.getTenantBySlug('acme');
     const renamed = await tenancy.renameTenant(tenant.id, 'Acme Incorporated');
     assert.equal(renamed.name, 'Acme Incorporated');
-    await assert.rejects(
-      tenancy.renameTenant(tenant.id, '  '),
-      (e: unknown) => TenancyError.hasCode(e, 'invalid_tenant'),
+    await assert.rejects(tenancy.renameTenant(tenant.id, '  '), (e: unknown) =>
+      TenancyError.hasCode(e, 'invalid_tenant'),
     );
   });
 

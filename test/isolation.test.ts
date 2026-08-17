@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
 import { scopedExecutor } from '../src/isolation';
-import { SKIP_REASON, setupAppRole, setupDatabase, type Harness } from './pg-executor';
+import { type Harness, SKIP_REASON, setupAppRole, setupDatabase } from './pg-executor';
 
 describe('row-level security', () => {
   let admin: Harness | null = null;
@@ -58,8 +58,14 @@ describe('row-level security', () => {
     const b = scopedExecutor(app!.db, 'tenant-b');
     const aRows = await a.query<{ name: string }>(`SELECT name FROM host.projects ORDER BY name`);
     const bRows = await b.query<{ name: string }>(`SELECT name FROM host.projects`);
-    assert.deepEqual(aRows.map((r) => r.name), ['alpha', 'apex']);
-    assert.deepEqual(bRows.map((r) => r.name), ['beta']);
+    assert.deepEqual(
+      aRows.map((r) => r.name),
+      ['alpha', 'apex'],
+    );
+    assert.deepEqual(
+      bRows.map((r) => r.name),
+      ['beta'],
+    );
   });
 
   it('an unscoped connection sees an empty table, not an error — even as the owner', async (t) => {
@@ -120,9 +126,8 @@ describe('row-level security', () => {
   it('protect refuses a table with no tenant column, by name', async (t) => {
     if (!ready()) return t.skip(SKIP_REASON);
     await app!.db.query(`CREATE TABLE host.untenanted (id serial PRIMARY KEY)`);
-    await assert.rejects(
-      app!.db.query(`SELECT tenancy.protect('host.untenanted')`),
-      (e: unknown) => String((e as Error).message).includes('has no column'),
+    await assert.rejects(app!.db.query(`SELECT tenancy.protect('host.untenanted')`), (e: unknown) =>
+      String((e as Error).message).includes('has no column'),
     );
   });
 });

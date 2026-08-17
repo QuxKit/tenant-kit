@@ -8,6 +8,7 @@
 // administer again without a DBA, and "ask the DBA" is not an API.
 
 import { TenancyError } from './errors.ts';
+import { type TenantRow, toTenant } from './tenants.ts';
 import type {
   AddMemberInput,
   Membership,
@@ -17,7 +18,6 @@ import type {
   TenantId,
   UserId,
 } from './types.ts';
-import { toTenant, type TenantRow } from './tenants.ts';
 
 // --- roles ------------------------------------------------------------------
 

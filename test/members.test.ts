@@ -8,7 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { TenancyError } from '../src/errors';
 import { createTenancy, type Tenancy } from '../src/instance';
 import { atLeast, requireRole } from '../src/members';
-import { SKIP_REASON, setupDatabase, type Harness } from './pg-executor';
+import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
 
 const NOW = new Date('2026-08-14T12:00:00Z');
 
@@ -72,9 +72,8 @@ describe('membership', () => {
     if (harness === null) return t.skip(SKIP_REASON);
     const promoted = await tenancy.setRole(tenantId, 'dev-1', 'admin');
     assert.equal(promoted.role, 'admin');
-    await assert.rejects(
-      tenancy.setRole(tenantId, 'owner-1', 'member'),
-      (e: unknown) => TenancyError.hasCode(e, 'last_owner'),
+    await assert.rejects(tenancy.setRole(tenantId, 'owner-1', 'member'), (e: unknown) =>
+      TenancyError.hasCode(e, 'last_owner'),
     );
     // With a second owner the demotion goes through.
     await tenancy.setRole(tenantId, 'dev-1', 'owner');
@@ -88,13 +87,11 @@ describe('membership', () => {
     if (harness === null) return t.skip(SKIP_REASON);
     await tenancy.removeMember(tenantId, 'dev-1');
     await tenancy.removeMember(tenantId, 'dev-1'); // absent: a no-op, not an error
-    await assert.rejects(
-      tenancy.removeMember(tenantId, 'owner-1'),
-      (e: unknown) => TenancyError.hasCode(e, 'last_owner'),
+    await assert.rejects(tenancy.removeMember(tenantId, 'owner-1'), (e: unknown) =>
+      TenancyError.hasCode(e, 'last_owner'),
     );
-    await assert.rejects(
-      tenancy.getMembership(tenantId, 'dev-1'),
-      (e: unknown) => TenancyError.hasCode(e, 'not_a_member'),
+    await assert.rejects(tenancy.getMembership(tenantId, 'dev-1'), (e: unknown) =>
+      TenancyError.hasCode(e, 'not_a_member'),
     );
   });
 

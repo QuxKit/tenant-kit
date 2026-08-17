@@ -83,7 +83,10 @@ export interface Tenancy {
   removeMember(tenantId: TenantId, userId: UserId): Promise<void>;
 
   // resolution
-  resolve(req: RequestLike, options: { userId: UserId; extract: Extractor }): Promise<ResolvedTenant>;
+  resolve(
+    req: RequestLike,
+    options: { userId: UserId; extract: Extractor },
+  ): Promise<ResolvedTenant>;
   authorize(claim: TenantClaim, userId: UserId): Promise<ResolvedTenant>;
 
   // context
