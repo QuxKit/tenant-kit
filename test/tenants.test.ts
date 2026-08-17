@@ -3,12 +3,13 @@
 // state checks the DDL enforces — a mock would only certify our own SQL text.
 
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 
-import { TenancyError } from '../src/errors';
-import { createTenancy, type Tenancy } from '../src/instance';
-import { validateSlug } from '../src/tenants';
-import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
+import { TenancyError } from '../src/errors.ts';
+import { createTenancy } from '../src/instance.ts';
+import { fromSubdomain } from '../src/resolve.ts';
+import { validateSlug } from '../src/tenants.ts';
+import { describeDb, setupDatabase } from './harness.ts';
 
 const NOW = new Date('2026-08-14T12:00:00Z');
 
@@ -34,18 +35,12 @@ describe('validateSlug', () => {
   });
 });
 
-describe('tenants', { skip: false }, () => {
-  let harness: Harness | null = null;
-  let tenancy: Tenancy;
+const harness = await setupDatabase();
 
-  before(async () => {
-    harness = await setupDatabase();
-    if (harness !== null) tenancy = createTenancy({ db: harness.db, clock: () => NOW });
-  });
-  after(async () => harness?.close());
+describeDb('tenants', harness, ({ db }) => {
+  const tenancy = createTenancy({ db, clock: () => NOW });
 
-  it('creates, and creating again with identical input is the same tenant', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('creates, and creating again with identical input is the same tenant', async () => {
     const first = await tenancy.createTenant({ slug: 'acme', name: 'Acme Corp' });
     const again = await tenancy.createTenant({ slug: 'acme', name: 'Acme Corp' });
     assert.equal(again.id, first.id);
@@ -53,17 +48,15 @@ describe('tenants', { skip: false }, () => {
     assert.deepEqual(first.createdAt, NOW);
   });
 
-  it('the same slug with a different name is slug_taken, with the difference named', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('the same slug with a different name is slug_taken, with the difference named', async () => {
     await assert.rejects(
       tenancy.createTenant({ slug: 'acme', name: 'Acme Ltd' }),
       (e: unknown) =>
-        TenancyError.hasCode(e, 'slug_taken') && e.failure.detail!.includes('Acme Corp'),
+        TenancyError.hasCode(e, 'slug_taken') && (e.failure.detail ?? '').includes('Acme Corp'),
     );
   });
 
-  it('looks up by id and slug, and unknown refs say which ref failed', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('looks up by id and slug, and unknown refs say which ref failed', async () => {
     const bySlug = await tenancy.getTenantBySlug('acme');
     const byId = await tenancy.getTenant(bySlug.id);
     assert.equal(byId.slug, 'acme');
@@ -73,8 +66,7 @@ describe('tenants', { skip: false }, () => {
     );
   });
 
-  it('renames, but not to an empty name', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('renames, but not to an empty name', async () => {
     const tenant = await tenancy.getTenantBySlug('acme');
     const renamed = await tenancy.renameTenant(tenant.id, 'Acme Incorporated');
     assert.equal(renamed.name, 'Acme Incorporated');
@@ -83,15 +75,14 @@ describe('tenants', { skip: false }, () => {
     );
   });
 
-  it('archives idempotently, keeping the first archived_at; restore clears it', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('archives idempotently, keeping the first archived_at; restore clears it', async () => {
     const tenant = await tenancy.createTenant({ slug: 'closing', name: 'Closing' });
     const archived = await tenancy.archiveTenant(tenant.id);
     assert.equal(archived.state, 'archived');
     assert.deepEqual(archived.archivedAt, NOW);
 
     const later = createTenancy({
-      db: harness.db,
+      db,
       clock: () => new Date('2026-09-01T00:00:00Z'),
     });
     const again = await later.archiveTenant(tenant.id);
@@ -102,8 +93,7 @@ describe('tenants', { skip: false }, () => {
     assert.equal(restored.archivedAt, null);
   });
 
-  it('lists by state', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('lists by state', async () => {
     await tenancy.createTenant({ slug: 'gone', name: 'Gone' });
     const gone = await tenancy.getTenantBySlug('gone');
     await tenancy.archiveTenant(gone.id);
@@ -114,9 +104,7 @@ describe('tenants', { skip: false }, () => {
     );
   });
 
-  it('resolves a request end to end: subdomain → tenant + membership', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
-    const { fromSubdomain } = await import('../src/resolve');
+  it('resolves a request end to end: subdomain → tenant + membership', async () => {
     const extract = fromSubdomain({ baseDomain: 'example.com' });
     const tenant = await tenancy.getTenantBySlug('acme');
     await tenancy.addMember({ tenantId: tenant.id, userId: 'u-1', role: 'owner' });

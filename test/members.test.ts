@@ -3,12 +3,12 @@
 // test at the bottom is the reason a read-then-write check would not do.
 
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 
-import { TenancyError } from '../src/errors';
-import { createTenancy, type Tenancy } from '../src/instance';
-import { atLeast, requireRole } from '../src/members';
-import { type Harness, SKIP_REASON, setupDatabase } from './pg-executor';
+import { TenancyError } from '../src/errors.ts';
+import { createTenancy } from '../src/instance.ts';
+import { atLeast, requireRole } from '../src/members.ts';
+import { describeDb, setupDatabase } from './harness.ts';
 
 const NOW = new Date('2026-08-14T12:00:00Z');
 
@@ -31,22 +31,18 @@ describe('roles', () => {
   });
 });
 
-describe('membership', () => {
-  let harness: Harness | null = null;
-  let tenancy: Tenancy;
+const harness = await setupDatabase();
+
+describeDb('membership', harness, ({ db }) => {
+  const tenancy = createTenancy({ db, clock: () => NOW });
   let tenantId: string;
 
   before(async () => {
-    harness = await setupDatabase();
-    if (harness === null) return;
-    tenancy = createTenancy({ db: harness.db, clock: () => NOW });
     tenantId = (await tenancy.createTenant({ slug: 'acme', name: 'Acme' })).id;
     await tenancy.addMember({ tenantId, userId: 'owner-1', role: 'owner' });
   });
-  after(async () => harness?.close());
 
-  it('adds idempotently on the same role, refuses a different role', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('adds idempotently on the same role, refuses a different role', async () => {
     const again = await tenancy.addMember({ tenantId, userId: 'owner-1', role: 'owner' });
     assert.equal(again.role, 'owner');
     await assert.rejects(
@@ -56,8 +52,7 @@ describe('membership', () => {
     );
   });
 
-  it('lists members and a user’s tenants with their standing', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('lists members and a user’s tenants with their standing', async () => {
     await tenancy.addMember({ tenantId, userId: 'dev-1', role: 'member' });
     const members = await tenancy.listMembers(tenantId);
     assert.deepEqual(members.map((m) => m.userId).sort(), ['dev-1', 'owner-1']);
@@ -68,8 +63,7 @@ describe('membership', () => {
     assert.equal(theirs[0].membership.role, 'member');
   });
 
-  it('changes roles, except demoting the last owner', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('changes roles, except demoting the last owner', async () => {
     const promoted = await tenancy.setRole(tenantId, 'dev-1', 'admin');
     assert.equal(promoted.role, 'admin');
     await assert.rejects(tenancy.setRole(tenantId, 'owner-1', 'member'), (e: unknown) =>
@@ -83,8 +77,7 @@ describe('membership', () => {
     await tenancy.setRole(tenantId, 'dev-1', 'member');
   });
 
-  it('removes idempotently, except the last owner', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('removes idempotently, except the last owner', async () => {
     await tenancy.removeMember(tenantId, 'dev-1');
     await tenancy.removeMember(tenantId, 'dev-1'); // absent: a no-op, not an error
     await assert.rejects(tenancy.removeMember(tenantId, 'owner-1'), (e: unknown) =>
@@ -95,8 +88,7 @@ describe('membership', () => {
     );
   });
 
-  it('two concurrent removals of the last two owners cannot both win', async (t) => {
-    if (harness === null) return t.skip(SKIP_REASON);
+  it('two concurrent removals of the last two owners cannot both win', async () => {
     const fresh = await tenancy.createTenant({ slug: 'race', name: 'Race' });
     await tenancy.addMember({ tenantId: fresh.id, userId: 'a', role: 'owner' });
     await tenancy.addMember({ tenantId: fresh.id, userId: 'b', role: 'owner' });
