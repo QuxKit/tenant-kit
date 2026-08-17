@@ -48,6 +48,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   `getSettings` / `patchSettings` (JSON merge patch, RFC 7396; `mergePatch`
   exported), size cap (`settingsMaxBytes`, default 64 KiB) with typed
   `settings_too_large`, `settings_patched` event.
+- Framework helpers: `@quxkit/tenant-kit/express` (`tenantMiddleware`,
+  `tenantHandler`), `/hono` (`tenantMiddleware`), `/next` (`withTenant`) —
+  resolve + role/permission gate + handler inside `withTenant`, typed
+  against minimal local interfaces (no framework imports; `express`,
+  `hono`, `next` are optional peers). Shared failure mapping
+  (`defaultFailureResponse`, overridable via `onFailure`): 401 / 400 / 404
+  (existence-hiding) / 403. `resolveForRequest` exported for other
+  frameworks.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only

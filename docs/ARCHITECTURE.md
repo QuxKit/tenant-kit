@@ -166,5 +166,5 @@ Inherited from billing-kit, restated because they are checkable in review:
 | Email delivery | `invitations.ts` issues and accepts tokens; *sending* them is the `InvitationMailer` seam, because a mail transport is a dependency this library refuses to pick for you. |
 | An RBAC engine | `roles.ts` stores flat permission strings per role and matches `exact` / `ns:*` / `*`. Resources, relations and inheritance are an engine's job (OpenFGA, via tenant-kit-adapters). |
 | A message broker | `events.ts` writes an outbox row in the mutation's transaction; *delivering* it (`events.poll` → your queue → `events.ack`) is a worker you own, so a rolled-back mutation cannot publish and a committed one cannot go unpublished. |
-| A framework adapter | `RequestLike` is four optional fields; every framework produces it in two lines. An adapter package would make one framework the favorite. |
+| A framework *dependency* | `./express`, `./hono` and `./next` exist, but are typed against minimal local interfaces and import nothing at runtime — no framework is the favorite, and `RequestLike` remains the neutral core any other framework wires up in two lines. |
 | Caching of the directory | A tenant lookup is one indexed read. Cache in front if you must; the library returning stale memberships would be a security decision made for you. |

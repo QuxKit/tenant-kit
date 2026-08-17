@@ -1,5 +1,7 @@
-// Build config. Two entries — the root and the `./pg` adapter — ESM + CJS +
-// declarations for each.
+// Build config. The root, the `./pg` adapter and the three framework helpers
+// — ESM + CJS + declarations for each. The framework entries import no
+// framework (they are typed against local interfaces), so nothing new is
+// external.
 //
 // tsup (esbuild) rather than `tsc` for the same structural reason as
 // billing-kit: `moduleResolution: bundler` lets src/ import extensionless
@@ -8,7 +10,13 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts', pg: 'src/pg.ts' },
+  entry: {
+    index: 'src/index.ts',
+    pg: 'src/pg.ts',
+    express: 'src/express.ts',
+    hono: 'src/hono.ts',
+    next: 'src/next.ts',
+  },
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,

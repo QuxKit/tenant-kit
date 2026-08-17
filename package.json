@@ -46,6 +46,30 @@
       "import": "./dist/pg.mjs",
       "require": "./dist/pg.cjs"
     },
+    "./express": {
+      "types": {
+        "import": "./dist/express.d.ts",
+        "require": "./dist/express.d.cts"
+      },
+      "import": "./dist/express.mjs",
+      "require": "./dist/express.cjs"
+    },
+    "./hono": {
+      "types": {
+        "import": "./dist/hono.d.ts",
+        "require": "./dist/hono.d.cts"
+      },
+      "import": "./dist/hono.mjs",
+      "require": "./dist/hono.cjs"
+    },
+    "./next": {
+      "types": {
+        "import": "./dist/next.d.ts",
+        "require": "./dist/next.d.cts"
+      },
+      "import": "./dist/next.mjs",
+      "require": "./dist/next.cjs"
+    },
     "./sql/*": "./sql/*",
     "./package.json": "./package.json"
   },
@@ -83,9 +107,21 @@
     "typescript": "^5.9.2"
   },
   "peerDependencies": {
+    "express": ">=4",
+    "hono": ">=4",
+    "next": ">=14",
     "pg": ">=8"
   },
   "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
+    "hono": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
     "pg": {
       "optional": true
     }
