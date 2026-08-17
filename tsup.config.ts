@@ -1,4 +1,5 @@
-// Build config. One entry, ESM + CJS + declarations.
+// Build config. Two entries — the root and the `./pg` adapter — ESM + CJS +
+// declarations for each.
 //
 // tsup (esbuild) rather than `tsc` for the same structural reason as
 // billing-kit: `moduleResolution: bundler` lets src/ import extensionless
@@ -7,7 +8,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: { index: 'src/index.ts', pg: 'src/pg.ts' },
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
@@ -15,6 +16,10 @@ export default defineConfig({
   splitting: false,
   bundle: true,
   skipNodeModulesBundle: true,
+
+  // `pg` is an optional peer: the adapter imports it, the build must not
+  // inline it, and the root entry never touches it.
+  external: ['pg'],
 
   // Matches tsconfig's `target`; esbuild does not read it from there.
   target: 'es2022',

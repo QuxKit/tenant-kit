@@ -38,6 +38,14 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
     },
+    "./pg": {
+      "types": {
+        "import": "./dist/pg.d.ts",
+        "require": "./dist/pg.d.cts"
+      },
+      "import": "./dist/pg.mjs",
+      "require": "./dist/pg.cjs"
+    },
     "./sql/*": "./sql/*",
     "./package.json": "./package.json"
   },
@@ -56,7 +64,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 'test/**/*.test.ts'",
     "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
   },
   "publishConfig": {
@@ -71,5 +79,13 @@
     "tsup": "^8.5.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.2"
+  },
+  "peerDependencies": {
+    "pg": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
   }
 }
