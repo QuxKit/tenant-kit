@@ -44,6 +44,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   the acceptor; `tenancy.audit.list(tenantId, { limit, before, actor })`.
   Free functions take a trailing `MutationMeta`; `record()` is exported for
   host mutations that want to write into the same outbox.
+- Per-tenant settings (`sql/006_settings.sql`: `tenants.settings jsonb`):
+  `getSettings` / `patchSettings` (JSON merge patch, RFC 7396; `mergePatch`
+  exported), size cap (`settingsMaxBytes`, default 64 KiB) with typed
+  `settings_too_large`, `settings_patched` event.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only

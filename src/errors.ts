@@ -28,6 +28,8 @@ export type TenancyFailure =
   | { code: 'slug_taken'; slug: string; detail?: string }
   | { code: 'unknown_tenant'; ref: string }
   | { code: 'tenant_archived'; tenantId: TenantId }
+  /** The merged settings document would exceed the cap. Nothing was written. */
+  | { code: 'settings_too_large'; tenantId: TenantId; bytes: number; maxBytes: number }
 
   // --- membership ----------------------------------------------------------
   /** Not a role name this tenant knows: not built-in and not defined here,
@@ -83,6 +85,8 @@ function describe(failure: TenancyFailure): string {
       return `no tenant for ${failure.ref}`;
     case 'tenant_archived':
       return `tenant ${failure.tenantId} is archived`;
+    case 'settings_too_large':
+      return `settings for tenant ${failure.tenantId} would be ${failure.bytes} bytes; the cap is ${failure.maxBytes}`;
     case 'invalid_role':
       return (
         `not a role: ${JSON.stringify(failure.role)}` +

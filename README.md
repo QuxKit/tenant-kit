@@ -101,6 +101,7 @@ psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/002_rls.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/003_invitations.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/004_roles.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/005_events.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/006_settings.sql
 ```
 
 Wire it to any `pg.Pool` with the shipped adapter (`@quxkit/tenant-kit/pg`;
@@ -292,6 +293,25 @@ deeper: that is an RBAC engine's job.
   role takes `FOR SHARE` on, so an assign racing a delete serializes.
 - **Per tenant.** A role defined in one tenant is `unknown_role` in another.
 
+## Settings
+
+A jsonb bag per tenant (`sql/006_settings.sql`), patched with **JSON merge
+patch** (RFC 7396) so a partial update never clobbers a sibling key and
+`null` deletes:
+
+```ts
+await tenancy.patchSettings(tenantId, { locale: 'en-GB', flags: { beta: true } });
+await tenancy.patchSettings(tenantId, { flags: { beta: null, dark: true } });
+await tenancy.getSettings(tenantId);   // { locale: 'en-GB', flags: { dark: true } }
+```
+
+Capped at 64 KiB serialized (`settingsMaxBytes` on `createTenancy`);
+a patch that would exceed it fails with `settings_too_large` (`bytes`,
+`maxBytes`) before anything is written. Patches run under a row lock, so
+concurrent patches to different keys both land. Records
+`settings_patched` (payload: the patched keys, not the values). `mergePatch`
+is exported for previewing a result client-side.
+
 ## Lifecycle events and the audit log
 
 Every mutation writes a lifecycle event **in its own transaction**
@@ -309,7 +329,7 @@ for (;;) {
 ```
 
 Event types: `tenant_created` / `tenant_renamed` / `tenant_archived` /
-`tenant_restored`, `member_added` / `member_role_changed` /
+`tenant_restored`, `settings_patched`, `member_added` / `member_role_changed` /
 `member_removed`, `invitation_issued` / `invitation_accepted` /
 `invitation_revoked` (`superseded: true` when a re-invite replaced it) /
 `invitation_resent` / `invitation_expired`, `role_defined` /
@@ -367,6 +387,7 @@ Every failure is a `TenancyError` whose `failure.code` is one of:
 | `slug_taken` | `createTenant`, `createTenantWithOwner` | the slug exists with a different name/state — or, on the owner path, without you as an owner (`detail`) |
 | `unknown_tenant` | lookups, `authorize` | no tenant for `ref` |
 | `tenant_archived` | `authorize`, `resolve` | the tenant exists but is archived |
+| `settings_too_large` | `patchSettings` | the merged document would be `bytes` > `maxBytes`; nothing written |
 | `invalid_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | malformed name; or (`roles.*`) reserved, or defined differently (`reason`) |
 | `unknown_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | not built-in and not defined for this tenant |
 | `role_in_use` | `roles.delete` | `members` / `invitations` still name it |

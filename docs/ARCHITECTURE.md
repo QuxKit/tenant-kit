@@ -19,10 +19,12 @@ flowchart TD
     isolation["isolation.ts<br/>scopedExecutor, routedExecutor"]
     coverage["coverage.ts<br/>which tables RLS covers"]
     events["events.ts<br/>outbox + audit, in-transaction"]
+    settings["settings.ts<br/>jsonb, merge patch, cap"]
     instance["instance.ts<br/>createTenancy — binds db + clock"]
 
     types --> tenants & members & resolve & context & isolation & coverage & events
-    events --> tenants & members & invitations & roles
+    events --> tenants & members & invitations & roles & settings
+    settings --> instance
     errors --> tenants & members & resolve & context & isolation
     tenants --> resolve
     members --> resolve

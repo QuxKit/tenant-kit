@@ -41,6 +41,7 @@ export const SQL_FILES = [
   '003_invitations.sql',
   '004_roles.sql',
   '005_events.sql',
+  '006_settings.sql',
 ];
 
 export interface Harness {

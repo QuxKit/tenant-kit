@@ -87,6 +87,14 @@ export {
   validateRoleName,
 } from './roles.ts';
 export {
+  DEFAULT_SETTINGS_MAX_BYTES,
+  getSettings,
+  mergePatch,
+  patchSettings,
+  type Settings,
+  type SettingsOptions,
+} from './settings.ts';
+export {
   archiveTenant,
   createTenant,
   createTenantWithOwner,

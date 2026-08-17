@@ -57,6 +57,7 @@ import {
   requirePermission,
   updateRole,
 } from './roles.ts';
+import { getSettings, patchSettings, type Settings } from './settings.ts';
 import {
   archiveTenant,
   createTenant,
@@ -105,6 +106,8 @@ export interface TenancyOptions {
   invitationMailer?: InvitationMailer;
   /** Default invitation lifetime; seven days unless set. Per-call `ttlMs` wins. */
   invitationTtlMs?: number;
+  /** Cap on a tenant's serialized settings. 64 KiB unless set. */
+  settingsMaxBytes?: number;
 }
 
 /** The outbox and the tenant timeline. */
@@ -177,6 +180,9 @@ export interface Tenancy {
   renameTenant(id: TenantId, name: string): Promise<Tenant>;
   archiveTenant(id: TenantId): Promise<Tenant>;
   restoreTenant(id: TenantId): Promise<Tenant>;
+  getSettings(id: TenantId): Promise<Settings>;
+  /** JSON merge patch (RFC 7396): objects merge, `null` deletes, else replaces. */
+  patchSettings(id: TenantId, patch: Settings): Promise<Settings>;
 
   // membership
   addMember(input: AddMemberInput): Promise<Membership>;
@@ -284,6 +290,9 @@ function build(
     renameTenant: (id, name) => renameTenant(db, id, name, clock(), meta()),
     archiveTenant: (id) => archiveTenant(db, id, clock(), meta()),
     restoreTenant: (id) => restoreTenant(db, id, clock(), meta()),
+    getSettings: (id) => getSettings(db, id),
+    patchSettings: (id, patch) =>
+      patchSettings(db, id, patch, clock(), { maxBytes: options.settingsMaxBytes }, meta()),
 
     addMember: (input) => addMember(db, input, clock(), meta()),
     getMembership: (tenantId, userId) => getMembership(db, tenantId, userId),
