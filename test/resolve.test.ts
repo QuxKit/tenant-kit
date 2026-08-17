@@ -72,10 +72,7 @@ describe('fromClaim', () => {
 
 describe('firstOf', () => {
   it('is precedence order, first claim wins', () => {
-    const extract = firstOf(
-      fromSubdomain({ baseDomain: 'example.com' }),
-      fromHeader('x-tenant'),
-    );
+    const extract = firstOf(fromSubdomain({ baseDomain: 'example.com' }), fromHeader('x-tenant'));
     const both = { hostname: 'sub.example.com', headers: { 'x-tenant': 'header' } };
     assert.equal(extract(both)?.slug, 'sub');
     assert.equal(extract({ headers: { 'x-tenant': 'header' } })?.slug, 'header');

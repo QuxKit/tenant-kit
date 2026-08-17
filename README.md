@@ -93,23 +93,25 @@ conforming to a small contract, none of them moving the scope line.
 ## Quickstart
 
 ```sh
-pnpm add @quxkit/tenant-kit
-psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/001_core.sql
-psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/002_rls.sql
+pnpm add @quxkit/tenant-kit pg
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/001_core.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/002_rls.sql
 ```
 
-Wire it to any `pg.Pool` (the ~10-line adapter is in
-[`test/pg-executor.ts`](test/pg-executor.ts); it satisfies billing-kit's
-executor too):
+Wire it to any `pg.Pool` with the shipped adapter (`@quxkit/tenant-kit/pg`;
+`pg` is an optional peer dependency, only needed for this import — the same
+adapter satisfies billing-kit's executor too):
 
 ```ts
+import pg from 'pg';
 import { createTenancy, firstOf, fromSubdomain, fromHeader } from '@quxkit/tenant-kit';
+import { pgExecutor } from '@quxkit/tenant-kit/pg';
 
-const tenancy = createTenancy({ db });
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const tenancy = createTenancy({ db: pgExecutor(pool) });
 
-// Once: a tenant and its first owner.
-const acme = await tenancy.createTenant({ slug: 'acme', name: 'Acme Corp' });
-await tenancy.addMember({ tenantId: acme.id, userId: user.id, role: 'owner' });
+// Once: a tenant and its first owner, in one transaction.
+const acme = await tenancy.createTenant({ slug: 'acme', name: 'Acme Corp', owner: user.id });
 
 // Every request: extract a claim, authorize it, make the tenant ambient.
 const extract = firstOf(fromSubdomain({ baseDomain: 'example.com' }), fromHeader());
@@ -127,7 +129,26 @@ app.get('/projects', async (req, res) => {
   const rows = await tenancy.db().query('SELECT * FROM projects');
   res.json(rows); // no WHERE tenant_id — the policy is the WHERE
 });
+
+// Several statements in one request: one transaction, scoped once.
+app.post('/projects', async (req, res) => {
+  const project = await tenancy.withTenant(tenancy.require().tenantId, async (tx) => {
+    const [row] = await tx.query('INSERT INTO projects (tenant_id, name) VALUES ($1, $2) RETURNING *',
+      [tenancy.require().tenantId, req.body.name]);
+    await tx.query('INSERT INTO audit (tenant_id, what) VALUES ($1, $2)',
+      [tenancy.require().tenantId, 'project.created']);
+    return row;
+  });
+  res.json(project);
+});
 ```
+
+`createTenant` without `owner` still works — it is the shape for imports and
+migrations that bring their own membership rows. A signup flow should pass
+`owner` (or call `createTenantWithOwner`, which also returns the membership),
+so no committed state ever holds a tenant with zero owners.
+
+A runnable version of this lives in [`examples/basic`](examples/basic).
 
 Turn on isolation per table, in your own migrations:
 
@@ -140,6 +161,18 @@ SELECT tenancy.protect('public.documents', 'org_id'); -- or name it
 rows are visible iff their tenant column equals the transaction-local tenant
 that `tenancy.db()` set. A query that escapes scoping sees an empty table —
 the forgotten-WHERE bug degrades from a data leak to a bug report.
+
+### Scoping shapes
+
+| Call | Transactions | Use it for |
+|---|---|---|
+| `tenancy.db().query(...)` | one per statement | a single query in a handler |
+| `tenancy.db().transaction(fn)` | one for `fn` | a few statements, tenant already ambient |
+| `tenancy.withTenant(scope, fn)` | one for `fn`, plus the ambient context | a whole request or job; `scope` is a `ResolvedTenant` or a tenant id |
+| `routedExecutor(route, { max, dispose })` | yours | database- or schema-per-tenant; an LRU-bounded cache with `close()` |
+
+Nested `transaction()` calls inside any of these are savepoints: an inner
+failure you catch rolls back only the inner work.
 
 ## The two-halves rule
 
@@ -162,12 +195,36 @@ layer decides *once* what each reveals. (Deliberately: answer both
 `unknown_tenant` and `not_a_member` with 404, or an attacker enumerates your
 customer list from your status codes.)
 
+## Errors
+
+Every failure is a `TenancyError` whose `failure.code` is one of:
+
+| Code | Raised by | Meaning |
+|---|---|---|
+| `invalid_slug` | `createTenant`, `validateSlug` | not a DNS label, or reserved (`reason` says which) |
+| `invalid_tenant` | `createTenant`, `renameTenant`, `addMember` | an empty `name`, `userId` or `owner` (`field`) |
+| `slug_taken` | `createTenant`, `createTenantWithOwner` | the slug exists with a different name/state — or, on the owner path, without you as an owner (`detail`) |
+| `unknown_tenant` | lookups, `authorize` | no tenant for `ref` |
+| `tenant_archived` | `authorize`, `resolve` | the tenant exists but is archived |
+| `invalid_role` | `addMember`, `setRole` | not one of `owner`/`admin`/`member` |
+| `not_a_member` | `getMembership`, `setRole`, `authorize` | no membership row |
+| `already_a_member` | `addMember` | the user is a member with a different role |
+| `last_owner` | `setRole`, `removeMember` | the change would leave zero owners |
+| `forbidden` | `requireRole` | `have` does not cover `need` |
+| `no_tenant_claim` | `resolve` | no extractor claimed anything |
+| `no_tenant_context` | `require`, `db()`, `scopedExecutor` | outside `run`, or an empty tenant id |
+
+Use `TenancyError.hasCode(e, 'last_owner')` to narrow; never parse `.message`.
+
 ## Guarantees held as invariants, not conventions
 
 - **A tenant always has at least one owner.** Demoting or removing the last
-  owner fails with `last_owner` — checked under row locks, so two concurrent
-  removals of the last two owners serialize and one loses. There is a test
-  that races them.
+  owner fails with `last_owner` — checked under row locks taken in one
+  statement, in one order, so two concurrent removals of the last two owners
+  serialize and one loses with `last_owner` (not a deadlock). There is a test
+  that forces the interleaving. And `createTenant({ owner })` inserts the
+  tenant and its owner in one transaction, so the invariant holds from the
+  first commit.
 - **Tenant scope cannot outlive its transaction.** Scoping uses
   `set_config(…, local := true)` inside a transaction pinned to one
   connection; the next borrower of that pooled connection starts unscoped.
@@ -194,7 +251,14 @@ customer list from your status codes.)
 
 Node ≥ 20.19, Postgres ≥ 14 for the RLS strategy (the directory alone works
 anywhere the `SqlExecutor` interface reaches). Zero runtime dependencies;
-`pg` is the test harness's, not the library's.
+`pg` is an optional peer, resolved only when you import
+`@quxkit/tenant-kit/pg`.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) (dev setup, the test database, the
+issue → branch → PR rule) and [SECURITY.md](SECURITY.md) (what is in scope,
+how to report privately). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 
 ## The QuxKit family

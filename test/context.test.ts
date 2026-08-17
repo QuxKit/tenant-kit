@@ -67,7 +67,12 @@ describe('TenantScope', () => {
       createdAt: new Date(),
       archivedAt: null,
     };
-    const membership = { tenantId: 't-1', userId: 'u-1', role: 'owner' as const, createdAt: new Date() };
+    const membership = {
+      tenantId: 't-1',
+      userId: 'u-1',
+      role: 'owner' as const,
+      createdAt: new Date(),
+    };
     scope.run({ tenant, membership }, () => {
       const ctx = scope.require();
       assert.equal(ctx.tenantId, 't-1');

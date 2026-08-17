@@ -43,8 +43,8 @@ flowchart LR
    the `tenantId` on every billing-kit usage event, subscription and ledger
    row, no casts anywhere.
 2. **`SqlExecutor` is structurally identical** in both libraries: `query` +
-   `transaction`, satisfiable by one `pg.Pool` adapter (~10 lines, e.g.
-   tenant-kit's `test/pg-executor.ts`). One pool, both schemas
+   `transaction`, satisfiable by one `pg.Pool` adapter — tenant-kit ships
+   one as `@quxkit/tenant-kit/pg`. One pool, both schemas
    (`tenancy.*`, `billing.*`), one transaction discipline.
 
 ## Wiring
@@ -53,8 +53,9 @@ flowchart LR
 import { createTenancy, firstOf, fromSubdomain, fromClaim } from '@quxkit/tenant-kit';
 import { createBilling } from '@quxkit/billing-kit';
 import { Quantity } from '@quxkit/billing-kit';
+import { pgExecutor } from '@quxkit/tenant-kit/pg';
 
-const db = fromPool(pool);            // one adapter serves both kits
+const db = pgExecutor(pool);          // one adapter serves both kits
 
 const tenancy = createTenancy({ db });
 const billing = createBilling({ db });
@@ -161,7 +162,7 @@ them together:
 import { routedExecutor } from '@quxkit/tenant-kit';
 
 const dbFor = routedExecutor((tenantId) =>
-  tenantId === WHALE ? fromPool(whalePool) : fromPool(sharedPool));
+  tenantId === WHALE ? pgExecutor(whalePool) : pgExecutor(sharedPool));
 
 const { tenantId } = tenancy.require();
 const billing = createBilling({ db: dbFor(tenantId) });

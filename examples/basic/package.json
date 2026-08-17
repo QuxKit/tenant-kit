@@ -1,0 +1,16 @@
+{
+  "name": "tenant-kit-example-basic",
+  "private": true,
+  "type": "module",
+  "description": "A tenant, its owner, request resolution and an RLS-scoped query — end to end against a local Postgres.",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@quxkit/tenant-kit": "link:../..",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

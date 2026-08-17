@@ -1,0 +1,48 @@
+# CI — lint, typecheck, build and the full test suite with coverage, on
+# every push to main and every PR.
+#
+# Runs on the self-hosted `host` runner, which has node (nvm), pnpm, git and
+# PostgreSQL already — so the DB-backed tests run for real: REQUIRE_DB=1 turns
+# an unreachable database into a failure, not a skip. No external actions are
+# used (no actions/checkout): the runner has no configured action registry, so
+# the checkout is a plain git clone with the job token.
+#
+# Nothing here names an absolute path. Node comes from whatever nvm has
+# installed, and psql from Homebrew's prefix, so the file survives a machine
+# rebuild or a different runner user.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: host
+    steps:
+      - name: Put node / pnpm / psql on PATH
+        # GITHUB_PATH is prepended for every later step. The nvm glob picks the
+        # newest installed node; brew --prefix resolves per machine.
+        run: |
+          ls -d "$HOME"/.nvm/versions/node/*/bin | tail -1 >> "$GITHUB_PATH"
+          echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout
+        run: |
+          rm -rf src
+          git clone "http://token:${{ github.token }}@localhost:3003/${{ github.repository }}.git" src
+          cd src && git checkout "${{ github.sha }}"
+
+      - name: Lint, typecheck, build, test
+        working-directory: src
+        env:
+          REQUIRE_DB: '1'
+          TENANT_KIT_TEST_DATABASE_URL: postgres://localhost:5432/tenant_kit_test
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run lint
+          pnpm run typecheck
+          pnpm run build
+          pnpm run test:coverage

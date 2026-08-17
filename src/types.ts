@@ -19,7 +19,7 @@
  *
  * Structurally identical to billing-kit's `SqlExecutor`, and deliberately so:
  * the two libraries are siblings, and an adapter written once over `pg.Pool`
- * (about ten lines — see `test/pg-executor.ts` for the proof) satisfies both.
+ * (a few dozen lines — `src/pg.ts`, shipped as `@quxkit/tenant-kit/pg`, is the proof) satisfies both.
  * An app running both kits carries one pool, not two.
  *
  * `query` returns rows as the driver produces them. `transaction` must pin
@@ -94,6 +94,14 @@ export interface CreateTenantInput {
   name: string;
   /** Supplied for migrations importing existing ids; generated otherwise. */
   id?: TenantId;
+  /**
+   * The first owner. When given, the tenant and its owner membership are
+   * inserted in one transaction, so no committed state ever has a tenant with
+   * zero owners. Omitting it is for imports and migrations that carry their
+   * own membership rows; a tenant created without an owner cannot be
+   * administered until `addMember(..., 'owner')` runs.
+   */
+  owner?: UserId;
 }
 
 // --- membership -------------------------------------------------------------

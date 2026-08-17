@@ -1,7 +1,7 @@
 {
   "name": "@quxkit/tenant-kit",
   "version": "0.1.0",
-  "description": "Multi-tenancy as a library \u2014 tenant identity, membership, resolution and isolation for the app you already run.",
+  "description": "Multi-tenancy as a library — tenant identity, membership, resolution and isolation for the app you already run.",
   "license": "Apache-2.0",
   "author": "BRETT",
   "type": "module",
@@ -38,6 +38,14 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
     },
+    "./pg": {
+      "types": {
+        "import": "./dist/pg.d.ts",
+        "require": "./dist/pg.d.cts"
+      },
+      "import": "./dist/pg.mjs",
+      "require": "./dist/pg.cjs"
+    },
     "./sql/*": "./sql/*",
     "./package.json": "./package.json"
   },
@@ -49,23 +57,37 @@
     "sql",
     "LICENSE",
     "NOTICE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup",
+    "lint": "biome check .",
+    "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
-    "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck"
+    "test": "tsx --test --test-concurrency=1 'test/**/*.test.ts'",
+    "test:coverage": "c8 --check-coverage tsx --test --test-concurrency=1 'test/**/*.test.ts'",
+    "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
   },
   "publishConfig": {
     "access": "restricted"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.21.0",
+    "c8": "^12.0.0",
     "pg": "^8.23.0",
     "tsup": "^8.5.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.2"
+  },
+  "peerDependencies": {
+    "pg": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
   }
 }

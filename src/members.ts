@@ -8,6 +8,7 @@
 // administer again without a DBA, and "ask the DBA" is not an API.
 
 import { TenancyError } from './errors.ts';
+import { type TenantRow, toTenant } from './tenants.ts';
 import type {
   AddMemberInput,
   Membership,
@@ -17,7 +18,6 @@ import type {
   TenantId,
   UserId,
 } from './types.ts';
-import { toTenant, type TenantRow } from './tenants.ts';
 
 // --- roles ------------------------------------------------------------------
 
@@ -147,17 +147,34 @@ export async function tenantsOf(
 }
 
 /**
- * Lock this tenant's owner rows and count them. `FOR UPDATE` is the point:
- * the count is only trustworthy for the rest of the transaction if nobody
- * else can delete an owner row while we hold it.
+ * Lock this tenant's owner rows *and* the row of the user being changed, in
+ * one statement, in one order.
+ *
+ * `FOR UPDATE` is the point: the owner count is only trustworthy for the rest
+ * of the transaction if nobody else can delete an owner row while we hold it.
+ * The single statement with `ORDER BY user_id` is the other point: two
+ * concurrent removals of the last two owners each want both rows, and if each
+ * took its own row first and the other's second they would deadlock (40P01)
+ * instead of serializing. Postgres locks rows in output order, so with the
+ * same ORDER BY on both sides the second transaction simply waits on the
+ * first row it cannot get, then sees the world after the first commits.
  */
-async function lockedOwnerCount(tx: SqlExecutor, tenantId: TenantId): Promise<number> {
-  const rows = await tx.query<{ user_id: string }>(
-    `SELECT user_id FROM tenancy.memberships
-      WHERE tenant_id = $1 AND role = 'owner' FOR UPDATE`,
-    [tenantId],
+async function lockOwnersAnd(
+  tx: SqlExecutor,
+  tenantId: TenantId,
+  userId: UserId,
+): Promise<{ target: MembershipRow | undefined; owners: number }> {
+  const rows = await tx.query<MembershipRow>(
+    `SELECT tenant_id, user_id, role, created_at FROM tenancy.memberships
+      WHERE tenant_id = $1 AND (role = 'owner' OR user_id = $2)
+      ORDER BY user_id
+      FOR UPDATE`,
+    [tenantId, userId],
   );
-  return rows.length;
+  return {
+    target: rows.find((r) => r.user_id === userId),
+    owners: rows.filter((r) => r.role === 'owner').length,
+  };
 }
 
 export async function setRole(
@@ -168,9 +185,11 @@ export async function setRole(
 ): Promise<Membership> {
   if (!isRole(role)) throw new TenancyError({ code: 'invalid_role', role });
   return db.transaction(async (tx) => {
-    const current = await getMembership(tx, tenantId, userId);
+    const { target, owners } = await lockOwnersAnd(tx, tenantId, userId);
+    if (target === undefined) throw new TenancyError({ code: 'not_a_member', tenantId, userId });
+    const current = toMembership(target);
     if (current.role === role) return current;
-    if (current.role === 'owner' && (await lockedOwnerCount(tx, tenantId)) === 1)
+    if (current.role === 'owner' && owners === 1)
       throw new TenancyError({ code: 'last_owner', tenantId, userId });
     const rows = await tx.query<MembershipRow>(
       `UPDATE tenancy.memberships SET role = $3
@@ -193,13 +212,9 @@ export async function removeMember(
   userId: UserId,
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    const rows = await tx.query<{ role: string }>(
-      `SELECT role FROM tenancy.memberships
-        WHERE tenant_id = $1 AND user_id = $2 FOR UPDATE`,
-      [tenantId, userId],
-    );
-    if (rows.length === 0) return;
-    if (rows[0].role === 'owner' && (await lockedOwnerCount(tx, tenantId)) === 1)
+    const { target, owners } = await lockOwnersAnd(tx, tenantId, userId);
+    if (target === undefined) return;
+    if (target.role === 'owner' && owners === 1)
       throw new TenancyError({ code: 'last_owner', tenantId, userId });
     await tx.query(`DELETE FROM tenancy.memberships WHERE tenant_id = $1 AND user_id = $2`, [
       tenantId,

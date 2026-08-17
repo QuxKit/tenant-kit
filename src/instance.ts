@@ -31,6 +31,7 @@ import { authorize, resolve } from './resolve.ts';
 import {
   archiveTenant,
   createTenant,
+  createTenantWithOwner,
   getTenant,
   getTenantBySlug,
   listTenants,
@@ -66,7 +67,12 @@ export interface TenancyOptions {
 
 export interface Tenancy {
   // tenants
+  /** With `input.owner`, tenant and first owner land in one transaction. */
   createTenant(input: CreateTenantInput): Promise<Tenant>;
+  /** The signup shape: tenant + owner membership, atomically. */
+  createTenantWithOwner(
+    input: CreateTenantInput & { owner: UserId },
+  ): Promise<{ tenant: Tenant; membership: Membership }>;
   getTenant(id: TenantId): Promise<Tenant>;
   getTenantBySlug(slug: string): Promise<Tenant>;
   listTenants(query?: { state?: Tenant['state'] }): Promise<Tenant[]>;
@@ -83,7 +89,10 @@ export interface Tenancy {
   removeMember(tenantId: TenantId, userId: UserId): Promise<void>;
 
   // resolution
-  resolve(req: RequestLike, options: { userId: UserId; extract: Extractor }): Promise<ResolvedTenant>;
+  resolve(
+    req: RequestLike,
+    options: { userId: UserId; extract: Extractor },
+  ): Promise<ResolvedTenant>;
   authorize(claim: TenantClaim, userId: UserId): Promise<ResolvedTenant>;
 
   // context
@@ -95,8 +104,24 @@ export interface Tenancy {
    * An RLS-scoped executor for the given tenant — or, with no argument, for
    * the ambient one, throwing `no_tenant_context` outside `run`. This is the
    * executor to hand to application queries, and to billing-kit.
+   *
+   * Each `query` on it is its own transaction (BEGIN, SET LOCAL, statement,
+   * COMMIT). For a request that runs several statements, `withTenant` opens
+   * one transaction and scopes it once.
    */
   db(tenantId?: TenantId): SqlExecutor;
+
+  /**
+   * One transaction, one `SET LOCAL`, many statements: the per-request shape.
+   *
+   * Opens a transaction on the unscoped executor, sets the tenant scope once,
+   * runs `fn` with an executor bound to that connection (nested
+   * `transaction()` calls on it are savepoints), and commits — or rolls back
+   * if `fn` throws. `fn` also runs inside `run(scope, …)`, so `current()` and
+   * `require()` see the tenant. `scope` is a `ResolvedTenant` from
+   * `resolve()` or, for background work, a bare tenant id.
+   */
+  withTenant<T>(scope: ResolvedTenant | TenantId, fn: (tx: SqlExecutor) => Promise<T>): Promise<T>;
 
   /** The unscoped executor this instance was built on. Named so that reaching
    *  for it reads as the deliberate act it should be: administrative queries,
@@ -111,6 +136,7 @@ export function createTenancy(options: TenancyOptions): Tenancy {
 
   return {
     createTenant: (input) => createTenant(db, input, clock(), reservedSlugs),
+    createTenantWithOwner: (input) => createTenantWithOwner(db, input, clock(), reservedSlugs),
     getTenant: (id) => getTenant(db, id),
     getTenantBySlug: (slug) => getTenantBySlug(db, slug),
     listTenants: (query) => listTenants(db, query),
@@ -133,6 +159,10 @@ export function createTenancy(options: TenancyOptions): Tenancy {
     require: () => scope.require(),
 
     db: (tenantId) => scopedExecutor(db, tenantId ?? scope.require().tenantId),
+    withTenant: (s, fn) => {
+      const tenantId = typeof s === 'string' ? s : s.tenant.id;
+      return scope.run(s, () => scopedExecutor(db, tenantId).transaction(fn));
+    },
     unscopedDb: () => db,
   };
 }

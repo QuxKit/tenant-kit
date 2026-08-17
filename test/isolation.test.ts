@@ -7,20 +7,20 @@
 // case FORCE exists for, and the case an app connection string usually is.
 
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { after, before, it } from 'node:test';
 
-import { scopedExecutor } from '../src/isolation';
-import { SKIP_REASON, setupAppRole, setupDatabase, type Harness } from './pg-executor';
+import { scopedExecutor } from '../src/isolation.ts';
+import { describeDb, type Harness, setupAppRole, setupDatabase } from './harness.ts';
 
-describe('row-level security', () => {
-  let admin: Harness | null = null;
-  let app: Harness | null = null;
+const admin = await setupDatabase();
+
+describeDb('row-level security', admin, (admin) => {
+  let app: Harness;
 
   before(async () => {
-    admin = await setupDatabase();
-    if (admin === null) return;
-    app = await setupAppRole(admin);
-    if (app === null) return;
+    const role = await setupAppRole(admin);
+    if (role === null) throw new Error('the app role could not connect; see setupAppRole');
+    app = role;
 
     // The app role builds its own tables — text tenant column matching
     // billing-kit's shape, and a uuid one to prove the policy casts on the
@@ -47,30 +47,30 @@ describe('row-level security', () => {
   });
   after(async () => {
     await app?.close();
-    await admin?.close();
   });
 
-  const ready = () => admin !== null && app !== null;
-
-  it('a scoped executor sees its tenant’s rows and no one else’s', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    const a = scopedExecutor(app!.db, 'tenant-a');
-    const b = scopedExecutor(app!.db, 'tenant-b');
-    const aRows = await a.query<{ name: string }>(`SELECT name FROM host.projects ORDER BY name`);
-    const bRows = await b.query<{ name: string }>(`SELECT name FROM host.projects`);
-    assert.deepEqual(aRows.map((r) => r.name), ['alpha', 'apex']);
-    assert.deepEqual(bRows.map((r) => r.name), ['beta']);
+  it('a scoped executor sees its tenant’s rows and no one else’s', async () => {
+    const a = scopedExecutor(app.db, 'tenant-a');
+    const b = scopedExecutor(app.db, 'tenant-b');
+    const aRows = await a.query<{ name: string }>('SELECT name FROM host.projects ORDER BY name');
+    const bRows = await b.query<{ name: string }>('SELECT name FROM host.projects');
+    assert.deepEqual(
+      aRows.map((r) => r.name),
+      ['alpha', 'apex'],
+    );
+    assert.deepEqual(
+      bRows.map((r) => r.name),
+      ['beta'],
+    );
   });
 
-  it('an unscoped connection sees an empty table, not an error — even as the owner', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    const rows = await app!.db.query(`SELECT * FROM host.projects`);
+  it('an unscoped connection sees an empty table, not an error — even as the owner', async () => {
+    const rows = await app.db.query('SELECT * FROM host.projects');
     assert.deepEqual(rows, [], 'FORCE row level security applies to the table owner');
   });
 
-  it('a scoped write for another tenant is rejected by WITH CHECK', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    const a = scopedExecutor(app!.db, 'tenant-a');
+  it('a scoped write for another tenant is rejected by WITH CHECK', async () => {
+    const a = scopedExecutor(app.db, 'tenant-a');
     await assert.rejects(
       a.query(`INSERT INTO host.projects (tenant_id, name) VALUES ('tenant-b', 'smuggled')`),
       (e: unknown) => (e as { code?: string }).code === '42501',
@@ -78,51 +78,45 @@ describe('row-level security', () => {
     );
   });
 
-  it('an UPDATE cannot move a row across the boundary', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    const a = scopedExecutor(app!.db, 'tenant-a');
+  it('an UPDATE cannot move a row across the boundary', async () => {
+    const a = scopedExecutor(app.db, 'tenant-a');
     await assert.rejects(
       a.query(`UPDATE host.projects SET tenant_id = 'tenant-b' WHERE name = 'alpha'`),
       (e: unknown) => (e as { code?: string }).code === '42501',
     );
   });
 
-  it('the scope does not leak to the connection’s next borrower', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    const a = scopedExecutor(app!.db, 'tenant-a');
-    await a.query(`SELECT 1`); // takes and returns a pooled connection, scoped
-    const afterwards = await app!.db.query(`SELECT * FROM host.projects`);
+  it('the scope does not leak to the connection’s next borrower', async () => {
+    const a = scopedExecutor(app.db, 'tenant-a');
+    await a.query('SELECT 1'); // takes and returns a pooled connection, scoped
+    const afterwards = await app.db.query('SELECT * FROM host.projects');
     assert.deepEqual(afterwards, [], 'SET LOCAL died with its transaction');
   });
 
-  it('scoped transactions stay scoped across their statements', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    const a = scopedExecutor(app!.db, 'tenant-a');
+  it('scoped transactions stay scoped across their statements', async () => {
+    const a = scopedExecutor(app.db, 'tenant-a');
     const count = await a.transaction(async (tx) => {
       await tx.query(`INSERT INTO host.projects (tenant_id, name) VALUES ('tenant-a', 'atlas')`);
-      const rows = await tx.query<{ n: string }>(`SELECT count(*) AS n FROM host.projects`);
+      const rows = await tx.query<{ n: string }>('SELECT count(*) AS n FROM host.projects');
       return Number(rows[0].n);
     });
     assert.equal(count, 3, 'sees its own insert plus its own two rows, nobody else’s');
   });
 
-  it('protects uuid tenant columns by casting the function, not the column', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
+  it('protects uuid tenant columns by casting the function, not the column', async () => {
     const id = '6b8f0f0e-8a1a-4b7e-9b6e-3f2a1c9d0e5f';
-    const scoped = scopedExecutor(app!.db, id);
-    await scoped.query(`INSERT INTO host.typed (tenant_id) VALUES ($1)`, [id]);
-    const rows = await scoped.query(`SELECT id FROM host.typed`);
+    const scoped = scopedExecutor(app.db, id);
+    await scoped.query('INSERT INTO host.typed (tenant_id) VALUES ($1)', [id]);
+    const rows = await scoped.query('SELECT id FROM host.typed');
     assert.equal(rows.length, 1);
-    const other = scopedExecutor(app!.db, '00000000-0000-0000-0000-000000000000');
-    assert.deepEqual(await other.query(`SELECT id FROM host.typed`), []);
+    const other = scopedExecutor(app.db, '00000000-0000-0000-0000-000000000000');
+    assert.deepEqual(await other.query('SELECT id FROM host.typed'), []);
   });
 
-  it('protect refuses a table with no tenant column, by name', async (t) => {
-    if (!ready()) return t.skip(SKIP_REASON);
-    await app!.db.query(`CREATE TABLE host.untenanted (id serial PRIMARY KEY)`);
-    await assert.rejects(
-      app!.db.query(`SELECT tenancy.protect('host.untenanted')`),
-      (e: unknown) => String((e as Error).message).includes('has no column'),
+  it('protect refuses a table with no tenant column, by name', async () => {
+    await app.db.query('CREATE TABLE host.untenanted (id serial PRIMARY KEY)');
+    await assert.rejects(app.db.query(`SELECT tenancy.protect('host.untenanted')`), (e: unknown) =>
+      String((e as Error).message).includes('has no column'),
     );
   });
 });
