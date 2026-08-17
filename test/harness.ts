@@ -35,7 +35,7 @@ export const SKIP_REASON =
   'run: createdb tenant_kit_test';
 
 /** Every shipped migration, in order. Add new files here as they land. */
-export const SQL_FILES = ['001_core.sql', '002_rls.sql', '003_invitations.sql'];
+export const SQL_FILES = ['001_core.sql', '002_rls.sql', '003_invitations.sql', '004_roles.sql'];
 
 export interface Harness {
   db: SqlExecutor;

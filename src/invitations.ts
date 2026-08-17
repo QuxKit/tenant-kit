@@ -17,7 +17,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { TenancyError } from './errors.ts';
-import { addMember, isRole } from './members.ts';
+import { addMember, assertRoleAssignable, isRoleName } from './members.ts';
 import { getTenant } from './tenants.ts';
 import type {
   Invitation,
@@ -131,7 +131,7 @@ export async function invite(
   now: Date,
   options: InvitationOptions = {},
 ): Promise<{ invitation: Invitation; token: string }> {
-  if (!isRole(input.role)) throw new TenancyError({ code: 'invalid_role', role: input.role });
+  if (!isRoleName(input.role)) throw new TenancyError({ code: 'invalid_role', role: input.role });
   if (input.invitedBy.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'invitedBy', reason: 'empty' });
   const email = normalizeEmail(input.email);
@@ -146,6 +146,7 @@ export async function invite(
   const token = newToken();
   const invitation = await db.transaction(async (tx) => {
     await lockInviteKey(tx, tenant.id, email);
+    await assertRoleAssignable(tx, tenant.id, input.role);
     await tx.query(
       `UPDATE tenancy.invitations SET state = 'revoked', revoked_at = $3
         WHERE tenant_id = $1 AND email = $2 AND state = 'pending'`,

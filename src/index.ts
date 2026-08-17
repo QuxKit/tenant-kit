@@ -9,6 +9,7 @@ export {
   type Tenancy,
   type TenancyInvitations,
   type TenancyOptions,
+  type TenancyRoles,
 } from './instance.ts';
 export {
   acceptInvitation,
@@ -31,9 +32,12 @@ export {
 } from './isolation.ts';
 export {
   addMember,
+  assertRoleAssignable,
   atLeast,
   getMembership,
+  isBuiltinRole,
   isRole,
+  isRoleName,
   listMembers,
   removeMember,
   requireRole,
@@ -50,6 +54,19 @@ export {
   resolve,
 } from './resolve.ts';
 export {
+  BUILTIN_ROLES,
+  can,
+  defineRole,
+  deleteRole,
+  getRole,
+  hasPermission,
+  listRoles,
+  permissionsOf,
+  requirePermission,
+  updateRole,
+  validateRoleName,
+} from './roles.ts';
+export {
   archiveTenant,
   createTenant,
   createTenantWithOwner,
@@ -63,8 +80,10 @@ export {
 } from './tenants.ts';
 export type {
   AddMemberInput,
+  BuiltinRole,
   Clock,
   CreateTenantInput,
+  DefineRoleInput,
   Extractor,
   Invitation,
   InvitationMailer,
@@ -76,6 +95,7 @@ export type {
   RequestLike,
   ResolvedTenant,
   Role,
+  RoleDefinition,
   SqlExecutor,
   Tenant,
   TenantClaim,

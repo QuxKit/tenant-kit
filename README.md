@@ -76,9 +76,11 @@ defends a piece of it:
   calling — a Clerk id, an Auth0 sub, your sessions table's primary key —
   tenant-kit checks *membership*, never identity. There is no users table in
   this schema and there never will be.
-- **Not an RBAC engine.** Three roles — `owner`, `admin`, `member` — and one
-  comparison, `atLeast`. Permissions-on-resources is your application's
-  vocabulary, built on top.
+- **Not an RBAC engine.** Three built-in roles — `owner`, `admin`, `member`
+  — plus roles a tenant defines as a *name with a flat list of permission
+  strings*. What `projects:write` means is your application's vocabulary;
+  resources, relations and inheritance graphs belong in an engine like
+  OpenFGA, which tenant-kit-adapters bridges to.
 - **Not billing.** Tenants get billed by [billing-kit](docs/BILLING_KIT.md),
   which consumes the `tenantId` this library produces. Neither imports the
   other.
@@ -97,6 +99,7 @@ pnpm add @quxkit/tenant-kit pg
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/002_rls.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/003_invitations.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/004_roles.sql
 ```
 
 Wire it to any `pg.Pool` with the shipped adapter (`@quxkit/tenant-kit/pg`;
@@ -228,6 +231,47 @@ The free functions (`invite`, `acceptInvitation`, `revokeInvitation`,
 `listInvitations`, `resendInvitation`, `sweepExpiredInvitations`) take
 `(db, …, now)` like everything else.
 
+## Roles and permissions
+
+The three built-ins are implied — no row, not deletable, not redefinable —
+and carry a documented default permission set. A tenant can define its own
+beside them (`sql/004_roles.sql`):
+
+```ts
+await tenancy.roles.define({
+  tenantId, name: 'billing', permissions: ['billing:*', 'tenant:read'], rank: 50,
+});
+await tenancy.setRole(tenantId, user.id, 'billing');   // custom names are assignable
+await tenancy.roles.can(tenantId, user.id, 'billing:invoices:read');   // true
+await tenancy.roles.require(tenantId, user.id, 'members:write');       // throws permission_denied
+await tenancy.roles.permissionsOf(tenantId, user.id);                  // ['billing:*', 'tenant:read']
+await tenancy.roles.list(tenantId);       // built-ins + custom, by rank
+await tenancy.roles.update(tenantId, 'billing', { permissions: ['billing:read'] });
+await tenancy.roles.delete(tenantId, 'billing');   // role_in_use while anyone holds it
+```
+
+Built-in defaults (`BUILTIN_ROLES`):
+
+| Role | Rank | Permissions |
+|---|---|---|
+| `member` | 0 | `tenant:read`, `members:read`, `roles:read` |
+| `admin` | 100 | member's, plus `tenant:write`, `members:write`, `invitations:read`, `invitations:write`, `roles:write` |
+| `owner` | 200 | `*` — everything, including whatever your app defines later |
+
+Matching is exact, `ns:*` (first segment before the colon), or `*`. Nothing
+deeper: that is an RBAC engine's job.
+
+- **`atLeast` / `requireRole` are the built-in ladder** and are unchanged; a
+  custom role is not on it (`atLeast('billing', 'member')` is `false`) —
+  custom roles carry permissions, not standing. Ask `can`.
+- **The last-owner invariant is unchanged.** Moving the only owner to a
+  custom role, however high its rank, is `last_owner`.
+- **A role in use cannot vanish.** `delete` refuses with `role_in_use` (and
+  the counts) while any membership or pending invitation names it — checked
+  under `FOR UPDATE` on the role row, which every assignment of a custom
+  role takes `FOR SHARE` on, so an assign racing a delete serializes.
+- **Per tenant.** A role defined in one tenant is `unknown_role` in another.
+
 ## The two-halves rule
 
 The API's one security idea, worth stating outside a docstring:
@@ -260,11 +304,14 @@ Every failure is a `TenancyError` whose `failure.code` is one of:
 | `slug_taken` | `createTenant`, `createTenantWithOwner` | the slug exists with a different name/state — or, on the owner path, without you as an owner (`detail`) |
 | `unknown_tenant` | lookups, `authorize` | no tenant for `ref` |
 | `tenant_archived` | `authorize`, `resolve` | the tenant exists but is archived |
-| `invalid_role` | `addMember`, `setRole`, `invitations.invite` | not one of `owner`/`admin`/`member` |
+| `invalid_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | malformed name; or (`roles.*`) reserved, or defined differently (`reason`) |
+| `unknown_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | not built-in and not defined for this tenant |
+| `role_in_use` | `roles.delete` | `members` / `invitations` still name it |
+| `permission_denied` | `roles.require` | the user's role does not cover `permission` |
 | `not_a_member` | `getMembership`, `setRole`, `authorize` | no membership row |
 | `already_a_member` | `addMember` | the user is a member with a different role |
 | `last_owner` | `setRole`, `removeMember` | the change would leave zero owners |
-| `forbidden` | `requireRole` | `have` does not cover `need` |
+| `forbidden` | `requireRole` | `have` does not cover `need` on the built-in ladder |
 | `unknown_invitation` | `invitations.*` | no invitation for the token or id (tampered tokens land here too) |
 | `invitation_expired` | `invitations.accept` | the token has timed out (`expiresAt`) |
 | `invitation_revoked` | `invitations.accept`, `.resend` | revoked, or superseded by a newer invite |

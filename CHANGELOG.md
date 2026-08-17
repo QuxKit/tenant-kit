@@ -16,6 +16,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   `unknown_invitation`); one pending invitation per (tenant, email);
   `InvitationMailer` seam (`invitationMailer` option) with
   `memoryInvitationMailer()` for tests; expiry sweep.
+- Custom roles and permissions (`sql/004_roles.sql`, `tenancy.roles.*` and
+  `defineRole` / `updateRole` / `deleteRole` / `getRole` / `listRoles` /
+  `can` / `permissionsOf` / `requirePermission` / `hasPermission`): a role is
+  a per-tenant name with `permissions text[]` and a `rank`; the built-ins
+  are implied, with a documented default permission set (`BUILTIN_ROLES`);
+  `addMember` / `setRole` / `invite` accept custom names (validated under
+  a share lock on the role row); `deleteRole` refuses `role_in_use`; typed
+  `unknown_role`, `role_in_use`, `permission_denied`; `invalid_role` gains
+  an optional `reason`. `Role` is now `BuiltinRole | string`; `atLeast` /
+  `requireRole` are the built-in ladder (a custom role answers `false`); the
+  last-owner invariant is unchanged. `isRole` is deprecated in favour of
+  `isBuiltinRole`.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only
@@ -37,6 +49,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   is unreachable); public-surface and harness sanity tests.
 
 ### Changed
+- `tenancy.memberships.role` is no longer CHECK-constrained to the three
+  built-in names (`004_roles.sql` drops it); the library validates roles
+  against `tenancy.roles`.
 - `scopedExecutor`'s nested `transaction()` uses savepoints instead of
   flattening into the outer transaction.
 - Test files use one shared harness (`test/harness.ts`); the per-test skip

@@ -38,6 +38,16 @@ import {
 } from './members.ts';
 import { authorize, resolve } from './resolve.ts';
 import {
+  can,
+  defineRole,
+  deleteRole,
+  getRole,
+  listRoles,
+  permissionsOf,
+  requirePermission,
+  updateRole,
+} from './roles.ts';
+import {
   archiveTenant,
   createTenant,
   createTenantWithOwner,
@@ -51,6 +61,7 @@ import type {
   AddMemberInput,
   Clock,
   CreateTenantInput,
+  DefineRoleInput,
   Extractor,
   Invitation,
   InvitationMailer,
@@ -61,6 +72,7 @@ import type {
   RequestLike,
   ResolvedTenant,
   Role,
+  RoleDefinition,
   SqlExecutor,
   Tenant,
   TenantClaim,
@@ -83,6 +95,27 @@ export interface TenancyOptions {
   invitationMailer?: InvitationMailer;
   /** Default invitation lifetime; seven days unless set. Per-call `ttlMs` wins. */
   invitationTtlMs?: number;
+}
+
+/** Custom roles and permission questions, namespaced on the instance. */
+export interface TenancyRoles {
+  /** Idempotent on an identical definition; a different one is `invalid_role`. */
+  define(input: DefineRoleInput): Promise<RoleDefinition>;
+  update(
+    tenantId: TenantId,
+    name: string,
+    patch: { permissions?: string[]; rank?: number },
+  ): Promise<RoleDefinition>;
+  /** Refuses with `role_in_use` while any membership or pending invitation names it. */
+  delete(tenantId: TenantId, name: string): Promise<void>;
+  get(tenantId: TenantId, name: string): Promise<RoleDefinition>;
+  /** Built-ins included, by rank. */
+  list(tenantId: TenantId): Promise<RoleDefinition[]>;
+  /** `false` for non-members; never throws for "no". */
+  can(tenantId: TenantId, userId: UserId, permission: string): Promise<boolean>;
+  permissionsOf(tenantId: TenantId, userId: UserId): Promise<string[]>;
+  /** Throws `permission_denied` (or `not_a_member`). */
+  require(tenantId: TenantId, userId: UserId, permission: string): Promise<void>;
 }
 
 /** The invitation workflow, namespaced on the instance. */
@@ -168,6 +201,9 @@ export interface Tenancy {
 
   // invitations
   invitations: TenancyInvitations;
+
+  // roles and permissions
+  roles: TenancyRoles;
 }
 
 export function createTenancy(options: TenancyOptions): Tenancy {
@@ -215,6 +251,18 @@ export function createTenancy(options: TenancyOptions): Tenancy {
       revoke: (id) => revokeInvitation(db, id, clock()),
       resend: (id) => resendInvitation(db, id, clock(), invitationOptions),
       sweepExpired: () => sweepExpiredInvitations(db, clock()),
+    },
+
+    roles: {
+      define: (input) => defineRole(db, input, clock()),
+      update: (tenantId, name, patch) => updateRole(db, tenantId, name, patch, clock()),
+      delete: (tenantId, name) => deleteRole(db, tenantId, name),
+      get: (tenantId, name) => getRole(db, tenantId, name),
+      list: (tenantId) => listRoles(db, tenantId),
+      can: (tenantId, userId, permission) => can(db, tenantId, userId, permission),
+      permissionsOf: (tenantId, userId) => permissionsOf(db, tenantId, userId),
+      require: (tenantId, userId, permission) =>
+        requirePermission(db, tenantId, userId, permission),
     },
   };
 }

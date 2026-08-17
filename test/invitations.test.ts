@@ -324,8 +324,12 @@ describeDb('invitations', harness, ({ db }) => {
       (e: unknown) => TenancyError.hasCode(e, 'invalid_tenant') && e.failure.field === 'ttlMs',
     );
     await assert.rejects(
-      tenancy.invitations.invite({ ...base, email: 'a@b.c', role: 'god' as never }),
+      tenancy.invitations.invite({ ...base, email: 'a@b.c', role: 'God!' }),
       (e: unknown) => TenancyError.hasCode(e, 'invalid_role'),
+    );
+    await assert.rejects(
+      tenancy.invitations.invite({ ...base, email: 'a@b.c', role: 'god' }),
+      (e: unknown) => TenancyError.hasCode(e, 'unknown_role') && e.failure.role === 'god',
     );
     await assert.rejects(
       tenancy.invitations.accept({ token: 'x', userId: '' }),

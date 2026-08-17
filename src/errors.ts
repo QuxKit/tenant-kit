@@ -16,7 +16,7 @@
 // can log it; what you reveal over HTTP is your choice, made once in your
 // error mapper instead of implicitly everywhere.
 
-import type { Role, TenantId, UserId } from './types.ts';
+import type { BuiltinRole, Role, TenantId, UserId } from './types.ts';
 
 export type TenancyFailure =
   // --- tenants -------------------------------------------------------------
@@ -30,7 +30,15 @@ export type TenancyFailure =
   | { code: 'tenant_archived'; tenantId: TenantId }
 
   // --- membership ----------------------------------------------------------
-  | { code: 'invalid_role'; role: string }
+  /** Not a role name this tenant knows: not built-in and not defined here,
+   *  or (on `defineRole`) a name that is malformed or reserved. */
+  | { code: 'invalid_role'; role: string; reason?: string }
+  | { code: 'unknown_role'; tenantId: TenantId; role: string }
+  /** `deleteRole` on a role that memberships or pending invitations still
+   *  name. Reassign them first; a membership with a dangling role is a
+   *  member with no permissions and no explanation. */
+  | { code: 'role_in_use'; tenantId: TenantId; role: string; members: number; invitations: number }
+  | { code: 'permission_denied'; tenantId: TenantId; userId: UserId; permission: string }
   | { code: 'not_a_member'; tenantId: TenantId; userId: UserId }
   /** The membership exists with a different role. Adding with the same role
    *  is idempotent and does not raise this. */
@@ -39,7 +47,7 @@ export type TenancyFailure =
    *  under a row lock, not a read-then-write — because a tenant with no owner
    *  is a tenant nobody can administer, ever again. */
   | { code: 'last_owner'; tenantId: TenantId; userId: UserId }
-  | { code: 'forbidden'; tenantId: TenantId; userId: UserId; need: Role; have: Role }
+  | { code: 'forbidden'; tenantId: TenantId; userId: UserId; need: BuiltinRole; have: Role }
 
   // --- invitations ---------------------------------------------------------
   /** No invitation for the token or id. Tokens are looked up by hash, so a
@@ -76,7 +84,16 @@ function describe(failure: TenancyFailure): string {
     case 'tenant_archived':
       return `tenant ${failure.tenantId} is archived`;
     case 'invalid_role':
-      return `not a role: ${JSON.stringify(failure.role)}`;
+      return (
+        `not a role: ${JSON.stringify(failure.role)}` +
+        (failure.reason === undefined ? '' : ` (${failure.reason})`)
+      );
+    case 'unknown_role':
+      return `tenant ${failure.tenantId} has no role ${JSON.stringify(failure.role)}`;
+    case 'role_in_use':
+      return `role ${failure.role} of tenant ${failure.tenantId} is held by ${failure.members} member(s) and ${failure.invitations} pending invitation(s)`;
+    case 'permission_denied':
+      return `user ${failure.userId} lacks ${failure.permission} in tenant ${failure.tenantId}`;
     case 'not_a_member':
       return `user ${failure.userId} is not a member of tenant ${failure.tenantId}`;
     case 'already_a_member':
