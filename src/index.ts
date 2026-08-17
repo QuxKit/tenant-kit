@@ -2,9 +2,47 @@
 // is not, is not.
 
 export { TenantScope } from './context.ts';
+export {
+  type CoverageGap,
+  type CoverageOptions,
+  type CoverageReport,
+  coverage,
+  type TableCoverage,
+} from './coverage.ts';
 
 export { TenancyError, type TenancyErrorCode, type TenancyFailure } from './errors.ts';
-export { createTenancy, type Tenancy, type TenancyOptions } from './instance.ts';
+export {
+  type AuditEntry,
+  ackEvents,
+  listAudit,
+  listEvents,
+  type MutationMeta,
+  pollEvents,
+  record,
+  type TenancyEvent,
+  type TenancyEventType,
+} from './events.ts';
+export {
+  createTenancy,
+  type Tenancy,
+  type TenancyAudit,
+  type TenancyEvents,
+  type TenancyInvitations,
+  type TenancyOptions,
+  type TenancyRoles,
+} from './instance.ts';
+export {
+  acceptInvitation,
+  DEFAULT_INVITATION_TTL_MS,
+  getInvitation,
+  hashInvitationToken,
+  invite,
+  listInvitations,
+  memoryInvitationMailer,
+  resendInvitation,
+  revokeInvitation,
+  sweepExpiredInvitations,
+} from './invitations.ts';
 export {
   type RoutedExecutor,
   type RoutedExecutorOptions,
@@ -14,9 +52,12 @@ export {
 } from './isolation.ts';
 export {
   addMember,
+  assertRoleAssignable,
   atLeast,
   getMembership,
+  isBuiltinRole,
   isRole,
+  isRoleName,
   listMembers,
   removeMember,
   requireRole,
@@ -33,6 +74,27 @@ export {
   resolve,
 } from './resolve.ts';
 export {
+  BUILTIN_ROLES,
+  can,
+  defineRole,
+  deleteRole,
+  getRole,
+  hasPermission,
+  listRoles,
+  permissionsOf,
+  requirePermission,
+  updateRole,
+  validateRoleName,
+} from './roles.ts';
+export {
+  DEFAULT_SETTINGS_MAX_BYTES,
+  getSettings,
+  mergePatch,
+  patchSettings,
+  type Settings,
+  type SettingsOptions,
+} from './settings.ts';
+export {
   archiveTenant,
   createTenant,
   createTenantWithOwner,
@@ -46,14 +108,22 @@ export {
 } from './tenants.ts';
 export type {
   AddMemberInput,
+  BuiltinRole,
   Clock,
   CreateTenantInput,
+  DefineRoleInput,
   Extractor,
+  Invitation,
+  InvitationMailer,
+  InvitationMessage,
+  InvitationState,
+  InviteInput,
   Logger,
   Membership,
   RequestLike,
   ResolvedTenant,
   Role,
+  RoleDefinition,
   SqlExecutor,
   Tenant,
   TenantClaim,

@@ -76,9 +76,11 @@ defends a piece of it:
   calling — a Clerk id, an Auth0 sub, your sessions table's primary key —
   tenant-kit checks *membership*, never identity. There is no users table in
   this schema and there never will be.
-- **Not an RBAC engine.** Three roles — `owner`, `admin`, `member` — and one
-  comparison, `atLeast`. Permissions-on-resources is your application's
-  vocabulary, built on top.
+- **Not an RBAC engine.** Three built-in roles — `owner`, `admin`, `member`
+  — plus roles a tenant defines as a *name with a flat list of permission
+  strings*. What `projects:write` means is your application's vocabulary;
+  resources, relations and inheritance graphs belong in an engine like
+  OpenFGA, which tenant-kit-adapters bridges to.
 - **Not billing.** Tenants get billed by [billing-kit](docs/BILLING_KIT.md),
   which consumes the `tenantId` this library produces. Neither imports the
   other.
@@ -96,6 +98,10 @@ conforming to a small contract, none of them moving the scope line.
 pnpm add @quxkit/tenant-kit pg
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/002_rls.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/003_invitations.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/004_roles.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/005_events.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/006_settings.sql
 ```
 
 Wire it to any `pg.Pool` with the shipped adapter (`@quxkit/tenant-kit/pg`;
@@ -162,6 +168,25 @@ rows are visible iff their tenant column equals the transaction-local tenant
 that `tenancy.db()` set. A query that escapes scoping sees an empty table —
 the forgotten-WHERE bug degrades from a data leak to a bug report.
 
+### Is everything protected?
+
+`protect` is opt-in per table, so the guarantee is only as good as the list
+of tables someone remembered. `tenancy.coverage()` reads the catalog and
+reports every table outside `tenancy.*` that has a tenant column and is
+*not* under enabled + forced RLS with at least one policy:
+
+```ts
+const { protected: ok, unprotected } = await tenancy.coverage();
+// unprotected: [{ table: 'public.forgot', column: 'tenant_id',
+//                 gaps: ['rls_disabled', 'rls_not_forced', 'no_policy'], ... }]
+assert.deepEqual(unprotected, []);   // a startup assertion, or a CI step
+```
+
+Options: `columns` (default `['tenant_id']` — add `'org_id'` if that is your
+convention) and `ignoreSchemas`. It runs as the ordinary app role — the
+catalog tables it reads are readable by everyone, and the app role's view is
+the one that matters. `coverage(db, options)` is the free function.
+
 ### Scoping shapes
 
 | Call | Transactions | Use it for |
@@ -173,6 +198,162 @@ the forgotten-WHERE bug degrades from a data leak to a bug report.
 
 Nested `transaction()` calls inside any of these are savepoints: an inner
 failure you catch rolls back only the inner work.
+
+## Invitations
+
+Bringing someone into a tenant is a workflow, not a directory write, and it is
+the one every app rebuilds — a token table, an expiry, a revoke button, and
+the bugs where a token is accepted twice or by the wrong person. tenant-kit
+ships it (`sql/003_invitations.sql`):
+
+```ts
+const tenancy = createTenancy({
+  db,
+  invitationMailer: async ({ tenant, invitation, token }) => {
+    await mail.send({ to: invitation.email, subject: `Join ${tenant.name}`,
+      text: `https://app.example.com/join?token=${token}` });
+  },
+});
+
+// Owner or admin, in your handler:
+const { invitation, token } = await tenancy.invitations.invite({
+  tenantId, email: 'dev@example.com', role: 'member', invitedBy: me.id, ttlMs: 3 * 86_400_000,
+});
+// `token` is returned exactly once; only its sha256 is stored.
+
+// The invitee, after your auth layer has identified them:
+const { membership } = await tenancy.invitations.accept({ token, userId: user.id });
+
+await tenancy.invitations.list(tenantId, { state: 'pending' });
+await tenancy.invitations.revoke(invitation.id);
+await tenancy.invitations.resend(invitation.id);   // fresh token + expiry, old token dead
+await tenancy.invitations.sweepExpired();          // housekeeping; a cron job's one line
+```
+
+What the library holds:
+
+- **The token is a bearer credential** — random, hashed at rest, single-use
+  per user. tenant-kit has no users table, so it cannot check that the
+  accepting user *is* the invited email; possession is the proof, and the
+  invitation binds to the first user who accepts.
+- **Accepting is idempotent for that user** and `invitation_taken` for anyone
+  else; expired (by time, sweep or not) is `invitation_expired`; revoked or
+  superseded is `invitation_revoked`; tampered, guessed or unknown is
+  `unknown_invitation` — the hash lookup does not distinguish them.
+- **One pending invitation per (tenant, email).** A fresh `invite` for an
+  address supersedes the old one under an advisory lock, and a partial unique
+  index backs that up.
+- **The mailer runs after commit.** If delivery throws, the invitation exists
+  and `resend` sends it again. `memoryInvitationMailer()` collects messages
+  for tests. Without a mailer, the token is still returned for you to
+  deliver.
+
+The free functions (`invite`, `acceptInvitation`, `revokeInvitation`,
+`listInvitations`, `resendInvitation`, `sweepExpiredInvitations`) take
+`(db, …, now)` like everything else.
+
+## Roles and permissions
+
+The three built-ins are implied — no row, not deletable, not redefinable —
+and carry a documented default permission set. A tenant can define its own
+beside them (`sql/004_roles.sql`):
+
+```ts
+await tenancy.roles.define({
+  tenantId, name: 'billing', permissions: ['billing:*', 'tenant:read'], rank: 50,
+});
+await tenancy.setRole(tenantId, user.id, 'billing');   // custom names are assignable
+await tenancy.roles.can(tenantId, user.id, 'billing:invoices:read');   // true
+await tenancy.roles.require(tenantId, user.id, 'members:write');       // throws permission_denied
+await tenancy.roles.permissionsOf(tenantId, user.id);                  // ['billing:*', 'tenant:read']
+await tenancy.roles.list(tenantId);       // built-ins + custom, by rank
+await tenancy.roles.update(tenantId, 'billing', { permissions: ['billing:read'] });
+await tenancy.roles.delete(tenantId, 'billing');   // role_in_use while anyone holds it
+```
+
+Built-in defaults (`BUILTIN_ROLES`):
+
+| Role | Rank | Permissions |
+|---|---|---|
+| `member` | 0 | `tenant:read`, `members:read`, `roles:read` |
+| `admin` | 100 | member's, plus `tenant:write`, `members:write`, `invitations:read`, `invitations:write`, `roles:write` |
+| `owner` | 200 | `*` — everything, including whatever your app defines later |
+
+Matching is exact, `ns:*` (first segment before the colon), or `*`. Nothing
+deeper: that is an RBAC engine's job.
+
+- **`atLeast` / `requireRole` are the built-in ladder** and are unchanged; a
+  custom role is not on it (`atLeast('billing', 'member')` is `false`) —
+  custom roles carry permissions, not standing. Ask `can`.
+- **The last-owner invariant is unchanged.** Moving the only owner to a
+  custom role, however high its rank, is `last_owner`.
+- **A role in use cannot vanish.** `delete` refuses with `role_in_use` (and
+  the counts) while any membership or pending invitation names it — checked
+  under `FOR UPDATE` on the role row, which every assignment of a custom
+  role takes `FOR SHARE` on, so an assign racing a delete serializes.
+- **Per tenant.** A role defined in one tenant is `unknown_role` in another.
+
+## Settings
+
+A jsonb bag per tenant (`sql/006_settings.sql`), patched with **JSON merge
+patch** (RFC 7396) so a partial update never clobbers a sibling key and
+`null` deletes:
+
+```ts
+await tenancy.patchSettings(tenantId, { locale: 'en-GB', flags: { beta: true } });
+await tenancy.patchSettings(tenantId, { flags: { beta: null, dark: true } });
+await tenancy.getSettings(tenantId);   // { locale: 'en-GB', flags: { dark: true } }
+```
+
+Capped at 64 KiB serialized (`settingsMaxBytes` on `createTenancy`);
+a patch that would exceed it fails with `settings_too_large` (`bytes`,
+`maxBytes`) before anything is written. Patches run under a row lock, so
+concurrent patches to different keys both land. Records
+`settings_patched` (payload: the patched keys, not the values). `mergePatch`
+is exported for previewing a result client-side.
+
+## Lifecycle events and the audit log
+
+Every mutation writes a lifecycle event **in its own transaction**
+(`sql/005_events.sql`) — so an event cannot fire for a change that rolled
+back, and a change cannot commit without its event. Drain them like an
+outbox:
+
+```ts
+// a worker
+for (;;) {
+  const events = await tenancy.events.poll({ limit: 100 });
+  for (const e of events) await publish(e);      // e.type, e.tenantId, e.payload, e.actor, e.at
+  await tenancy.events.ack(events.map((e) => e.id));
+}
+```
+
+Event types: `tenant_created` / `tenant_renamed` / `tenant_archived` /
+`tenant_restored`, `settings_patched`, `member_added` / `member_role_changed` /
+`member_removed`, `invitation_issued` / `invitation_accepted` /
+`invitation_revoked` (`superseded: true` when a re-invite replaced it) /
+`invitation_resent` / `invitation_expired`, `role_defined` /
+`role_updated` / `role_deleted`. Idempotent no-ops (re-adding a member,
+archiving an archived tenant) write nothing. `events.list(tenantId)` is the
+tenant's timeline, acked or not. Ids are assigned at insert, not commit —
+ack what you handle rather than trusting "highest id seen" as a cursor.
+
+The **audit log** answers *who*, and is written by every mutating call when
+an actor is known:
+
+```ts
+await tenancy.as(me.id).setRole(tenantId, user.id, 'admin');
+// -> tenancy.audit_log: actor=me.id action=member_role_changed target=user.id metadata={from,to}
+
+// Inside run(resolved, …) / withTenant(resolved, …) the resolved user is the actor
+// automatically; invite() attributes to invitedBy and accept() to the acceptor.
+await tenancy.audit.list(tenantId, { limit: 50, before, actor });
+```
+
+`as(actor, metadata?)` returns the same instance bound to that actor
+(`metadata` is merged into every audit row it writes). Without an actor,
+events are still written and audit rows are not. The free functions take a
+trailing `MutationMeta` (`{ actor, metadata }`).
 
 ## The two-halves rule
 
@@ -202,15 +383,23 @@ Every failure is a `TenancyError` whose `failure.code` is one of:
 | Code | Raised by | Meaning |
 |---|---|---|
 | `invalid_slug` | `createTenant`, `validateSlug` | not a DNS label, or reserved (`reason` says which) |
-| `invalid_tenant` | `createTenant`, `renameTenant`, `addMember` | an empty `name`, `userId` or `owner` (`field`) |
+| `invalid_tenant` | `createTenant`, `renameTenant`, `addMember`, `invitations.invite` | an empty `name`, `userId`, `owner`, `invitedBy`, a bad `email` or `ttlMs` (`field`) |
 | `slug_taken` | `createTenant`, `createTenantWithOwner` | the slug exists with a different name/state — or, on the owner path, without you as an owner (`detail`) |
 | `unknown_tenant` | lookups, `authorize` | no tenant for `ref` |
 | `tenant_archived` | `authorize`, `resolve` | the tenant exists but is archived |
-| `invalid_role` | `addMember`, `setRole` | not one of `owner`/`admin`/`member` |
+| `settings_too_large` | `patchSettings` | the merged document would be `bytes` > `maxBytes`; nothing written |
+| `invalid_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | malformed name; or (`roles.*`) reserved, or defined differently (`reason`) |
+| `unknown_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | not built-in and not defined for this tenant |
+| `role_in_use` | `roles.delete` | `members` / `invitations` still name it |
+| `permission_denied` | `roles.require` | the user's role does not cover `permission` |
 | `not_a_member` | `getMembership`, `setRole`, `authorize` | no membership row |
 | `already_a_member` | `addMember` | the user is a member with a different role |
 | `last_owner` | `setRole`, `removeMember` | the change would leave zero owners |
-| `forbidden` | `requireRole` | `have` does not cover `need` |
+| `forbidden` | `requireRole` | `have` does not cover `need` on the built-in ladder |
+| `unknown_invitation` | `invitations.*` | no invitation for the token or id (tampered tokens land here too) |
+| `invitation_expired` | `invitations.accept` | the token has timed out (`expiresAt`) |
+| `invitation_revoked` | `invitations.accept`, `.resend` | revoked, or superseded by a newer invite |
+| `invitation_taken` | `invitations.accept`, `.revoke`, `.resend` | already accepted by `acceptedBy`, who is not you |
 | `no_tenant_claim` | `resolve` | no extractor claimed anything |
 | `no_tenant_context` | `require`, `db()`, `scopedExecutor` | outside `run`, or an empty tenant id |
 

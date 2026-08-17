@@ -8,9 +8,11 @@
 // administer again without a DBA, and "ask the DBA" is not an API.
 
 import { TenancyError } from './errors.ts';
+import { type MutationMeta, record } from './events.ts';
 import { type TenantRow, toTenant } from './tenants.ts';
 import type {
   AddMemberInput,
+  BuiltinRole,
   Membership,
   Role,
   SqlExecutor,
@@ -21,23 +23,41 @@ import type {
 
 // --- roles ------------------------------------------------------------------
 
-const RANK: Record<Role, number> = { member: 0, admin: 1, owner: 2 };
+const RANK: Record<BuiltinRole, number> = { member: 0, admin: 1, owner: 2 };
 
-export function isRole(value: string): value is Role {
+export function isBuiltinRole(value: string): value is BuiltinRole {
   return value === 'owner' || value === 'admin' || value === 'member';
 }
 
-/** `atLeast('admin', 'member')` — does the first role cover the second? */
-export function atLeast(have: Role, need: Role): boolean {
-  return RANK[have] >= RANK[need];
+/** @deprecated Renamed `isBuiltinRole`; custom roles made "is a role" tenant-relative. */
+export const isRole = isBuiltinRole;
+
+/**
+ * Same shape as a slug, and for the same reason: role names end up in URLs
+ * and config files.
+ */
+const ROLE_NAME = /^[a-z][a-z0-9_-]*$/;
+
+export function isRoleName(value: string): boolean {
+  return value.length > 0 && value.length <= 63 && ROLE_NAME.test(value);
 }
 
 /**
- * The only permission check this library does. Throws `forbidden` carrying
- * both roles, so the caller's 403 can say what was missing without composing
- * strings out of band.
+ * `atLeast('admin', 'member')` — does the first role cover the second, on
+ * the built-in ladder? A custom role is not on it and answers `false` for
+ * every `need`: custom roles carry permissions, not standing, and the
+ * question to ask about one is `can(...)`.
  */
-export function requireRole(membership: Membership, need: Role): void {
+export function atLeast(have: Role, need: BuiltinRole): boolean {
+  return isBuiltinRole(have) && RANK[have] >= RANK[need];
+}
+
+/**
+ * The built-in-ladder check. Throws `forbidden` carrying both roles, so the
+ * caller's 403 can say what was missing without composing strings out of
+ * band. For custom roles and application permissions, `requirePermission`.
+ */
+export function requireRole(membership: Membership, need: BuiltinRole): void {
   if (!atLeast(membership.role, need))
     throw new TenancyError({
       code: 'forbidden',
@@ -68,6 +88,27 @@ export function toMembership(row: MembershipRow): Membership {
 
 const SELECT = `SELECT tenant_id, user_id, role, created_at FROM tenancy.memberships`;
 
+/**
+ * Assert that `role` is assignable in this tenant, and — for a custom role —
+ * hold a share lock on its row for the rest of `tx`. Called by `addMember`,
+ * `setRole` and `invite` inside their transactions. Built-ins pass without
+ * touching the store; the share lock is what makes `deleteRole`'s
+ * `FOR UPDATE` wait for (or be waited on by) an in-flight assignment.
+ */
+export async function assertRoleAssignable(
+  tx: SqlExecutor,
+  tenantId: TenantId,
+  role: string,
+): Promise<void> {
+  if (isBuiltinRole(role)) return;
+  if (!isRoleName(role)) throw new TenancyError({ code: 'invalid_role', role });
+  const rows = await tx.query<{ name: string }>(
+    `SELECT name FROM tenancy.roles WHERE tenant_id = $1 AND name = $2 FOR SHARE`,
+    [tenantId, role],
+  );
+  if (rows.length === 0) throw new TenancyError({ code: 'unknown_role', tenantId, role });
+}
+
 // --- operations -------------------------------------------------------------
 
 /**
@@ -81,18 +122,32 @@ export async function addMember(
   db: SqlExecutor,
   input: AddMemberInput,
   now: Date,
+  meta?: MutationMeta,
 ): Promise<Membership> {
-  if (!isRole(input.role)) throw new TenancyError({ code: 'invalid_role', role: input.role });
+  if (!isRoleName(input.role)) throw new TenancyError({ code: 'invalid_role', role: input.role });
   if (input.userId.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'userId', reason: 'empty' });
 
-  const inserted = await db.query<MembershipRow>(
-    `INSERT INTO tenancy.memberships (tenant_id, user_id, role, created_at)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (tenant_id, user_id) DO NOTHING
-     RETURNING tenant_id, user_id, role, created_at`,
-    [input.tenantId, input.userId, input.role, now],
-  );
+  const inserted = await db.transaction(async (tx) => {
+    await assertRoleAssignable(tx, input.tenantId, input.role);
+    const rows = await tx.query<MembershipRow>(
+      `INSERT INTO tenancy.memberships (tenant_id, user_id, role, created_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tenant_id, user_id) DO NOTHING
+       RETURNING tenant_id, user_id, role, created_at`,
+      [input.tenantId, input.userId, input.role, now],
+    );
+    if (rows.length === 1)
+      await record(tx, {
+        tenantId: input.tenantId,
+        type: 'member_added',
+        payload: { userId: input.userId, role: input.role },
+        target: input.userId,
+        at: now,
+        meta,
+      });
+    return rows;
+  });
   if (inserted.length === 1) return toMembership(inserted[0]);
 
   const existing = await getMembership(db, input.tenantId, input.userId);
@@ -182,13 +237,16 @@ export async function setRole(
   tenantId: TenantId,
   userId: UserId,
   role: Role,
+  now: Date,
+  meta?: MutationMeta,
 ): Promise<Membership> {
-  if (!isRole(role)) throw new TenancyError({ code: 'invalid_role', role });
+  if (!isRoleName(role)) throw new TenancyError({ code: 'invalid_role', role });
   return db.transaction(async (tx) => {
     const { target, owners } = await lockOwnersAnd(tx, tenantId, userId);
     if (target === undefined) throw new TenancyError({ code: 'not_a_member', tenantId, userId });
     const current = toMembership(target);
     if (current.role === role) return current;
+    await assertRoleAssignable(tx, tenantId, role);
     if (current.role === 'owner' && owners === 1)
       throw new TenancyError({ code: 'last_owner', tenantId, userId });
     const rows = await tx.query<MembershipRow>(
@@ -197,6 +255,14 @@ export async function setRole(
        RETURNING tenant_id, user_id, role, created_at`,
       [tenantId, userId, role],
     );
+    await record(tx, {
+      tenantId,
+      type: 'member_role_changed',
+      payload: { userId, from: current.role, to: role },
+      target: userId,
+      at: now,
+      meta,
+    });
     return toMembership(rows[0]);
   });
 }
@@ -210,6 +276,8 @@ export async function removeMember(
   db: SqlExecutor,
   tenantId: TenantId,
   userId: UserId,
+  now: Date,
+  meta?: MutationMeta,
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const { target, owners } = await lockOwnersAnd(tx, tenantId, userId);
@@ -220,5 +288,13 @@ export async function removeMember(
       tenantId,
       userId,
     ]);
+    await record(tx, {
+      tenantId,
+      type: 'member_removed',
+      payload: { userId, role: target.role },
+      target: userId,
+      at: now,
+      meta,
+    });
   });
 }

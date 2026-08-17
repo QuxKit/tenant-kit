@@ -7,6 +7,47 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Invitations (`sql/003_invitations.sql`, `tenancy.invitations.*` and the
+  free functions `invite` / `acceptInvitation` / `revokeInvitation` /
+  `listInvitations` / `resendInvitation` / `sweepExpiredInvitations`):
+  tokens are random, returned once and stored as sha256; `accept` is
+  idempotent for the accepting user and typed for everyone else
+  (`invitation_taken`, `invitation_expired`, `invitation_revoked`,
+  `unknown_invitation`); one pending invitation per (tenant, email);
+  `InvitationMailer` seam (`invitationMailer` option) with
+  `memoryInvitationMailer()` for tests; expiry sweep.
+- Custom roles and permissions (`sql/004_roles.sql`, `tenancy.roles.*` and
+  `defineRole` / `updateRole` / `deleteRole` / `getRole` / `listRoles` /
+  `can` / `permissionsOf` / `requirePermission` / `hasPermission`): a role is
+  a per-tenant name with `permissions text[]` and a `rank`; the built-ins
+  are implied, with a documented default permission set (`BUILTIN_ROLES`);
+  `addMember` / `setRole` / `invite` accept custom names (validated under
+  a share lock on the role row); `deleteRole` refuses `role_in_use`; typed
+  `unknown_role`, `role_in_use`, `permission_denied`; `invalid_role` gains
+  an optional `reason`. `Role` is now `BuiltinRole | string`; `atLeast` /
+  `requireRole` are the built-in ladder (a custom role answers `false`); the
+  last-owner invariant is unchanged. `isRole` is deprecated in favour of
+  `isBuiltinRole`.
+- `tenancy.coverage()` / `coverage(db, { columns, ignoreSchemas })`: lists
+  every table outside `tenancy.*` with a tenant column, split into
+  `protected` (RLS enabled + forced + at least one policy) and
+  `unprotected` (with `gaps`: `rls_disabled`, `rls_not_forced`,
+  `no_policy`). Works as the non-superuser app role.
+- Lifecycle events outbox and audit log (`sql/005_events.sql`):
+  `tenancy.events` is written in the same transaction as every mutation
+  (`tenant_*`, `member_*`, `invitation_*`, `role_*`; no-ops write nothing);
+  `tenancy.events.poll({ after, limit })` / `.ack(ids)` / `.list(tenantId)`.
+  `tenancy.audit_log` (actor, action, target, at, metadata) is written by
+  every mutating call when an actor is known: `tenancy.as(actor, metadata?)`
+  binds one explicitly, the ambient `ResolvedTenant`'s user is used inside
+  `run` / `withTenant`, `invite` attributes to `invitedBy` and `accept` to
+  the acceptor; `tenancy.audit.list(tenantId, { limit, before, actor })`.
+  Free functions take a trailing `MutationMeta`; `record()` is exported for
+  host mutations that want to write into the same outbox.
+- Per-tenant settings (`sql/006_settings.sql`: `tenants.settings jsonb`):
+  `getSettings` / `patchSettings` (JSON merge patch, RFC 7396; `mergePatch`
+  exported), size cap (`settingsMaxBytes`, default 64 KiB) with typed
+  `settings_too_large`, `settings_patched` event.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only
@@ -28,6 +69,12 @@ adheres to [Semantic Versioning](https://semver.org/).
   is unreachable); public-surface and harness sanity tests.
 
 ### Changed
+- `setRole`, `removeMember`, `renameTenant`, `restoreTenant`, `deleteRole`
+  (free functions) now take `now: Date` — every mutation carries a
+  timestamp for its event. The instance methods are unchanged.
+- `tenancy.memberships.role` is no longer CHECK-constrained to the three
+  built-in names (`004_roles.sql` drops it); the library validates roles
+  against `tenancy.roles`.
 - `scopedExecutor`'s nested `transaction()` uses savepoints instead of
   flattening into the outer transaction.
 - Test files use one shared harness (`test/harness.ts`); the per-test skip

@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { TenancyError } from './errors.ts';
+import { type MutationMeta, record } from './events.ts';
 import type {
   CreateTenantInput,
   Membership,
@@ -104,6 +105,7 @@ export async function createTenant(
   input: CreateTenantInput,
   now: Date,
   reserved?: ReadonlySet<string>,
+  meta?: MutationMeta,
 ): Promise<Tenant> {
   if (input.owner !== undefined) {
     const { tenant } = await createTenantWithOwner(
@@ -111,31 +113,45 @@ export async function createTenant(
       { ...input, owner: input.owner },
       now,
       reserved,
+      meta,
     );
     return tenant;
   }
   validateSlug(input.slug, reserved);
   if (input.name.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'name', reason: 'empty' });
-  return (await insertTenant(db, input, now)).tenant;
+  return (await db.transaction((tx) => insertTenant(tx, input, now, meta))).tenant;
 }
 
+/** Insert (or find) the tenant and, when it was inserted, record `tenant_created`. */
 async function insertTenant(
-  db: SqlExecutor,
+  tx: SqlExecutor,
   input: CreateTenantInput,
   now: Date,
+  meta: MutationMeta | undefined,
 ): Promise<{ tenant: Tenant; created: boolean }> {
   const id = input.id ?? randomUUID();
-  const inserted = await db.query<TenantRow>(
+  const inserted = await tx.query<TenantRow>(
     `INSERT INTO tenancy.tenants (id, slug, name, state, created_at)
      VALUES ($1, $2, $3, 'active', $4)
      ON CONFLICT (slug) DO NOTHING
      RETURNING id, slug, name, state, created_at, archived_at`,
     [id, input.slug, input.name, now],
   );
-  if (inserted.length === 1) return { tenant: toTenant(inserted[0]), created: true };
+  if (inserted.length === 1) {
+    const tenant = toTenant(inserted[0]);
+    await record(tx, {
+      tenantId: tenant.id,
+      type: 'tenant_created',
+      payload: { slug: tenant.slug, name: tenant.name },
+      target: tenant.id,
+      at: now,
+      meta,
+    });
+    return { tenant, created: true };
+  }
 
-  const existing = await getTenantBySlug(db, input.slug);
+  const existing = await getTenantBySlug(tx, input.slug);
   if (existing.name === input.name && existing.state === 'active')
     return { tenant: existing, created: false };
   throw new TenancyError({
@@ -168,6 +184,7 @@ export async function createTenantWithOwner(
   input: CreateTenantInput & { owner: UserId },
   now: Date,
   reserved?: ReadonlySet<string>,
+  meta?: MutationMeta,
 ): Promise<{ tenant: Tenant; membership: Membership }> {
   validateSlug(input.slug, reserved);
   if (input.name.trim().length === 0)
@@ -176,7 +193,16 @@ export async function createTenantWithOwner(
     throw new TenancyError({ code: 'invalid_tenant', field: 'owner', reason: 'empty' });
 
   return db.transaction(async (tx) => {
-    const { tenant, created } = await insertTenant(tx, input, now);
+    const { tenant, created } = await insertTenant(tx, input, now, meta);
+    if (created)
+      await record(tx, {
+        tenantId: tenant.id,
+        type: 'member_added',
+        payload: { userId: input.owner, role: 'owner' },
+        target: input.owner,
+        at: now,
+        meta,
+      });
     const rows = created
       ? await tx.query<MembershipRowLite>(
           `INSERT INTO tenancy.memberships (tenant_id, user_id, role, created_at)
@@ -241,14 +267,41 @@ export async function listTenants(
   return rows.map(toTenant);
 }
 
-export async function renameTenant(db: SqlExecutor, id: TenantId, name: string): Promise<Tenant> {
+/**
+ * Rename, recording `tenant_renamed` only when the name actually changed —
+ * a retry with the same name is not a second event.
+ */
+export async function renameTenant(
+  db: SqlExecutor,
+  id: TenantId,
+  name: string,
+  now: Date,
+  meta?: MutationMeta,
+): Promise<Tenant> {
   if (name.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'name', reason: 'empty' });
-  const rows = await db.query<TenantRow>(
-    `UPDATE tenancy.tenants SET name = $2 WHERE id = $1
-     RETURNING id, slug, name, state, created_at, archived_at`,
-    [id, name],
-  );
+  return db.transaction(async (tx) => {
+    const before = await lockTenant(tx, id);
+    if (before.name === name) return before;
+    const rows = await tx.query<TenantRow>(
+      `UPDATE tenancy.tenants SET name = $2 WHERE id = $1
+       RETURNING id, slug, name, state, created_at, archived_at`,
+      [id, name],
+    );
+    await record(tx, {
+      tenantId: id,
+      type: 'tenant_renamed',
+      payload: { from: before.name, to: name },
+      target: id,
+      at: now,
+      meta,
+    });
+    return toTenant(rows[0]);
+  });
+}
+
+async function lockTenant(tx: SqlExecutor, id: TenantId): Promise<Tenant> {
+  const rows = await tx.query<TenantRow>(`${SELECT} WHERE id = $1 FOR UPDATE`, [id]);
   if (rows.length === 0) throw new TenancyError({ code: 'unknown_tenant', ref: id });
   return toTenant(rows[0]);
 }
@@ -258,27 +311,58 @@ export async function renameTenant(db: SqlExecutor, id: TenantId, name: string):
  * billing-kit's ledger, if it is running — still reference this id, and a
  * ledger whose tenant vanished cannot explain itself in an audit. Archived
  * tenants fail `resolve()` with `tenant_archived`; their data outlives them.
- * Idempotent: archiving an archived tenant keeps the original `archived_at`,
- * because the first archival is the fact and a retry is not a second fact.
+ * Idempotent: archiving an archived tenant keeps the original `archived_at`
+ * and records no second event, because the first archival is the fact and a
+ * retry is not a second fact.
  */
-export async function archiveTenant(db: SqlExecutor, id: TenantId, now: Date): Promise<Tenant> {
-  const rows = await db.query<TenantRow>(
-    `UPDATE tenancy.tenants
-        SET state = 'archived', archived_at = COALESCE(archived_at, $2)
-      WHERE id = $1
-     RETURNING id, slug, name, state, created_at, archived_at`,
-    [id, now],
-  );
-  if (rows.length === 0) throw new TenancyError({ code: 'unknown_tenant', ref: id });
-  return toTenant(rows[0]);
+export async function archiveTenant(
+  db: SqlExecutor,
+  id: TenantId,
+  now: Date,
+  meta?: MutationMeta,
+): Promise<Tenant> {
+  return db.transaction(async (tx) => {
+    const before = await lockTenant(tx, id);
+    if (before.state === 'archived') return before;
+    const rows = await tx.query<TenantRow>(
+      `UPDATE tenancy.tenants SET state = 'archived', archived_at = $2 WHERE id = $1
+       RETURNING id, slug, name, state, created_at, archived_at`,
+      [id, now],
+    );
+    await record(tx, {
+      tenantId: id,
+      type: 'tenant_archived',
+      payload: {},
+      target: id,
+      at: now,
+      meta,
+    });
+    return toTenant(rows[0]);
+  });
 }
 
-export async function restoreTenant(db: SqlExecutor, id: TenantId): Promise<Tenant> {
-  const rows = await db.query<TenantRow>(
-    `UPDATE tenancy.tenants SET state = 'active', archived_at = NULL WHERE id = $1
-     RETURNING id, slug, name, state, created_at, archived_at`,
-    [id],
-  );
-  if (rows.length === 0) throw new TenancyError({ code: 'unknown_tenant', ref: id });
-  return toTenant(rows[0]);
+export async function restoreTenant(
+  db: SqlExecutor,
+  id: TenantId,
+  now: Date,
+  meta?: MutationMeta,
+): Promise<Tenant> {
+  return db.transaction(async (tx) => {
+    const before = await lockTenant(tx, id);
+    if (before.state === 'active') return before;
+    const rows = await tx.query<TenantRow>(
+      `UPDATE tenancy.tenants SET state = 'active', archived_at = NULL WHERE id = $1
+       RETURNING id, slug, name, state, created_at, archived_at`,
+      [id],
+    );
+    await record(tx, {
+      tenantId: id,
+      type: 'tenant_restored',
+      payload: {},
+      target: id,
+      at: now,
+      meta,
+    });
+    return toTenant(rows[0]);
+  });
 }

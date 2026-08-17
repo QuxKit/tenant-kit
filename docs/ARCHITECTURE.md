@@ -12,22 +12,35 @@ flowchart TD
     errors["errors.ts<br/>TenancyFailure union"]
     tenants["tenants.ts<br/>directory: tenants"]
     members["members.ts<br/>directory: memberships"]
+    invitations["invitations.ts<br/>workflow: invite → accept"]
+    roles["roles.ts<br/>custom roles, can()"]
     resolve["resolve.ts<br/>extract → authorize"]
     context["context.ts<br/>TenantScope (ALS)"]
     isolation["isolation.ts<br/>scopedExecutor, routedExecutor"]
+    coverage["coverage.ts<br/>which tables RLS covers"]
+    events["events.ts<br/>outbox + audit, in-transaction"]
+    settings["settings.ts<br/>jsonb, merge patch, cap"]
     instance["instance.ts<br/>createTenancy — binds db + clock"]
 
-    types --> tenants & members & resolve & context & isolation
+    types --> tenants & members & resolve & context & isolation & coverage & events
+    events --> tenants & members & invitations & roles & settings
+    settings --> instance
     errors --> tenants & members & resolve & context & isolation
     tenants --> resolve
     members --> resolve
-    tenants & members & resolve & context & isolation --> instance
+    tenants & members --> invitations
+    members --> roles
+    tenants & members & invitations & roles & resolve & context & isolation & coverage --> instance
 ```
 
 `types.ts` and `errors.ts` have no dependencies and no runtime logic beyond
 the error class; everything else depends on them and not on each other,
 except `resolve.ts`, which is exactly the module whose job is to join the
-directory to the request. `instance.ts` is sugar: it binds `(db, clock)` once
+directory to the request, and `invitations.ts`, which is a workflow *over*
+the directory (it ends in `addMember`) and so depends on both halves of it.
+`roles.ts` sits beside `members.ts`: the role-assignability check lives in
+`members.ts` (every membership write needs it), and `roles.ts` adds the
+definitions and the permission questions on top. `instance.ts` is sugar: it binds `(db, clock)` once
 and owns the `TenantScope`, and every free function stays exported for
 callers holding a transaction or composing their own instance.
 
@@ -99,10 +112,29 @@ summary:
 - The directory tables themselves are **not** policied: they are what the
   resolve path reads before any scope exists. Isolation is for the host
   app's data, and for billing-kit's schema if it is present.
+- `coverage()` is the audit of the opt-in: it reads `pg_class` /
+  `pg_policy` for every tenant-bearing table outside `tenancy.*` and names
+  the ones without enabled + forced RLS and a policy. A forgotten
+  `protect()` becomes a failing startup assertion instead of an incident.
 - `routedExecutor` is the whole database-per-tenant offering — LRU-bounded
   memoized routing over a function you write, with `dispose`/`close()` — because provisioning and per-database
   migrations are operational choices a library would only get wrong on your
   behalf.
+
+## 4a. Events and audit
+
+Every mutating function ends with `record(tx, …)` on its own transaction
+executor: an event row always, an audit row when `MutationMeta.actor` is
+known. Two failure modes this removes from the host app: publishing an
+event for a change that then rolls back, and committing a change whose
+publish then fails. `pollEvents` / `ackEvents` are the outbox drain; ids are
+assigned at insert time, so a consumer acks what it handled rather than
+keeping a high-water mark.
+
+The actor reaches the free functions as their last argument. The instance
+fills it from `as(actor)` when bound, else from the ambient
+`ResolvedTenant`'s membership — the user the request was resolved for —
+else leaves it absent (event, no audit row).
 
 ## 5. API design rules
 
@@ -131,8 +163,8 @@ Inherited from billing-kit, restated because they are checkable in review:
 | Absent | Why |
 |---|---|
 | Users table, sessions, passwords | Auth is the host's. `UserId` is opaque; membership is checked, identity never. |
-| Invitations, email flows | Workflow, not directory. Build on `addMember` with your own token table. |
-| Permissions beyond three roles | Application vocabulary. `atLeast` is the only comparison the library will ever do. |
-| Tenant provisioning hooks / lifecycle events | Your job queue already exists; wrap `createTenant`. |
+| Email delivery | `invitations.ts` issues and accepts tokens; *sending* them is the `InvitationMailer` seam, because a mail transport is a dependency this library refuses to pick for you. |
+| An RBAC engine | `roles.ts` stores flat permission strings per role and matches `exact` / `ns:*` / `*`. Resources, relations and inheritance are an engine's job (OpenFGA, via tenant-kit-adapters). |
+| A message broker | `events.ts` writes an outbox row in the mutation's transaction; *delivering* it (`events.poll` → your queue → `events.ack`) is a worker you own, so a rolled-back mutation cannot publish and a committed one cannot go unpublished. |
 | A framework adapter | `RequestLike` is four optional fields; every framework produces it in two lines. An adapter package would make one framework the favorite. |
 | Caching of the directory | A tenant lookup is one indexed read. Cache in front if you must; the library returning stale memberships would be a security decision made for you. |

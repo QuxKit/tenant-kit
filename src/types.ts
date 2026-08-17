@@ -107,14 +107,42 @@ export interface CreateTenantInput {
 // --- membership -------------------------------------------------------------
 
 /**
- * Three roles, fixed. `owner` administers membership itself, `admin`
- * administers the tenant, `member` uses it. Deliberately not a general RBAC
- * engine: permissions-on-resources is an application vocabulary, and every
- * tenancy library that tried to own it became a policy language nobody
- * adopted whole. The host app builds its permissions *on top of* these three,
- * and `atLeast` is the only comparison this library will ever do.
+ * The three roles every tenant has. `owner` administers membership itself,
+ * `admin` administers the tenant, `member` uses it. They are implied — no
+ * row, not deletable, not redefinable — and `atLeast` orders them.
  */
-export type Role = 'owner' | 'admin' | 'member';
+export type BuiltinRole = 'owner' | 'admin' | 'member';
+
+/**
+ * A role name: one of the built-ins, or a name the tenant defined with
+ * `defineRole`. Typed so that the literals still autocomplete while any
+ * string is assignable — the store, not the type, decides whether a custom
+ * name exists for a given tenant.
+ *
+ * This is deliberately not a general RBAC engine: roles carry a flat list of
+ * permission strings, matched exactly or by `ns:*` / `*`. What the strings
+ * mean is your application's vocabulary. Anything richer — resources,
+ * relations, inheritance graphs — belongs in an engine like OpenFGA, which
+ * tenant-kit-adapters bridges to.
+ */
+export type Role = BuiltinRole | (string & {});
+
+/** A role as `getRole`/`listRoles` describe it: built-in or custom, uniformly. */
+export interface RoleDefinition {
+  tenantId: TenantId;
+  name: Role;
+  permissions: string[];
+  /** Ordering within the tenant. Built-ins: member 0, admin 100, owner 200. */
+  rank: number;
+  builtin: boolean;
+}
+
+export interface DefineRoleInput {
+  tenantId: TenantId;
+  name: string;
+  permissions: string[];
+  rank?: number;
+}
 
 export interface Membership {
   tenantId: TenantId;
@@ -128,6 +156,56 @@ export interface AddMemberInput {
   userId: UserId;
   role: Role;
 }
+
+// --- invitations ------------------------------------------------------------
+
+export type InvitationState = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export interface Invitation {
+  id: string;
+  tenantId: TenantId;
+  /** Lower-cased at issue. What the invitation was sent to — not verified
+   *  against the accepting user, since users are opaque here. */
+  email: string;
+  role: Role;
+  invitedBy: UserId;
+  state: InvitationState;
+  createdAt: Date;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+  acceptedBy: UserId | null;
+  revokedAt: Date | null;
+}
+
+export interface InviteInput {
+  tenantId: TenantId;
+  email: string;
+  role: Role;
+  invitedBy: UserId;
+  /** How long the token is valid. Defaults to seven days. */
+  ttlMs?: number;
+}
+
+/**
+ * What the mailer seam receives: enough to write the email — the tenant by
+ * name, the invitation, and the clear-text token, which exists in memory only
+ * for this call. `kind` distinguishes a first send from a `resend`.
+ */
+export interface InvitationMessage {
+  kind: 'invite' | 'resend';
+  tenant: Tenant;
+  invitation: Invitation;
+  token: string;
+}
+
+/**
+ * The seam between issuing an invitation and delivering it. tenant-kit
+ * never sends mail; it hands the message to whatever you plug in here — a
+ * mail-kit `send`, a queue, or the memory collector the tests use. Called
+ * after the invitation is committed, so a delivery failure leaves an
+ * invitation you can `resend`.
+ */
+export type InvitationMailer = (message: InvitationMessage) => Promise<void>;
 
 // --- resolution -------------------------------------------------------------
 
