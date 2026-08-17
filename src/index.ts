@@ -2,6 +2,13 @@
 // is not, is not.
 
 export { TenantScope } from './context.ts';
+export {
+  type CoverageGap,
+  type CoverageOptions,
+  type CoverageReport,
+  coverage,
+  type TableCoverage,
+} from './coverage.ts';
 
 export { TenancyError, type TenancyErrorCode, type TenancyFailure } from './errors.ts';
 export {

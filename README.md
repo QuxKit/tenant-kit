@@ -166,6 +166,25 @@ rows are visible iff their tenant column equals the transaction-local tenant
 that `tenancy.db()` set. A query that escapes scoping sees an empty table —
 the forgotten-WHERE bug degrades from a data leak to a bug report.
 
+### Is everything protected?
+
+`protect` is opt-in per table, so the guarantee is only as good as the list
+of tables someone remembered. `tenancy.coverage()` reads the catalog and
+reports every table outside `tenancy.*` that has a tenant column and is
+*not* under enabled + forced RLS with at least one policy:
+
+```ts
+const { protected: ok, unprotected } = await tenancy.coverage();
+// unprotected: [{ table: 'public.forgot', column: 'tenant_id',
+//                 gaps: ['rls_disabled', 'rls_not_forced', 'no_policy'], ... }]
+assert.deepEqual(unprotected, []);   // a startup assertion, or a CI step
+```
+
+Options: `columns` (default `['tenant_id']` — add `'org_id'` if that is your
+convention) and `ignoreSchemas`. It runs as the ordinary app role — the
+catalog tables it reads are readable by everyone, and the app role's view is
+the one that matters. `coverage(db, options)` is the free function.
+
 ### Scoping shapes
 
 | Call | Transactions | Use it for |

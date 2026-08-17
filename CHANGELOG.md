@@ -28,6 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/).
   `requireRole` are the built-in ladder (a custom role answers `false`); the
   last-owner invariant is unchanged. `isRole` is deprecated in favour of
   `isBuiltinRole`.
+- `tenancy.coverage()` / `coverage(db, { columns, ignoreSchemas })`: lists
+  every table outside `tenancy.*` with a tenant column, split into
+  `protected` (RLS enabled + forced + at least one policy) and
+  `unprotected` (with `gaps`: `rls_disabled`, `rls_not_forced`,
+  `no_policy`). Works as the non-superuser app role.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only

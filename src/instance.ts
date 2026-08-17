@@ -18,6 +18,7 @@
 // them, not a replacement.
 
 import { TenantScope } from './context.ts';
+import { type CoverageOptions, type CoverageReport, coverage } from './coverage.ts';
 import {
   acceptInvitation,
   getInvitation,
@@ -194,6 +195,14 @@ export interface Tenancy {
    */
   withTenant<T>(scope: ResolvedTenant | TenantId, fn: (tx: SqlExecutor) => Promise<T>): Promise<T>;
 
+  /**
+   * Which tenant-bearing tables outside `tenancy.*` are under forced RLS
+   * with a policy, and which are not. Runs on the unscoped executor; the
+   * catalog is readable by any role. `unprotected` should be empty; a
+   * startup assertion or CI step that says so is the point.
+   */
+  coverage(options?: CoverageOptions): Promise<CoverageReport>;
+
   /** The unscoped executor this instance was built on. Named so that reaching
    *  for it reads as the deliberate act it should be: administrative queries,
    *  cross-tenant reports, the resolve path itself. */
@@ -242,6 +251,7 @@ export function createTenancy(options: TenancyOptions): Tenancy {
       return scope.run(s, () => scopedExecutor(db, tenantId).transaction(fn));
     },
     unscopedDb: () => db,
+    coverage: (opts) => coverage(db, opts),
 
     invitations: {
       invite: (input) => invite(db, input, clock(), invitationOptions),

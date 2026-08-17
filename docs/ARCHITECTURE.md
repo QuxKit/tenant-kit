@@ -17,15 +17,16 @@ flowchart TD
     resolve["resolve.ts<br/>extract → authorize"]
     context["context.ts<br/>TenantScope (ALS)"]
     isolation["isolation.ts<br/>scopedExecutor, routedExecutor"]
+    coverage["coverage.ts<br/>which tables RLS covers"]
     instance["instance.ts<br/>createTenancy — binds db + clock"]
 
-    types --> tenants & members & resolve & context & isolation
+    types --> tenants & members & resolve & context & isolation & coverage
     errors --> tenants & members & resolve & context & isolation
     tenants --> resolve
     members --> resolve
     tenants & members --> invitations
     members --> roles
-    tenants & members & invitations & roles & resolve & context & isolation --> instance
+    tenants & members & invitations & roles & resolve & context & isolation & coverage --> instance
 ```
 
 `types.ts` and `errors.ts` have no dependencies and no runtime logic beyond
@@ -107,6 +108,10 @@ summary:
 - The directory tables themselves are **not** policied: they are what the
   resolve path reads before any scope exists. Isolation is for the host
   app's data, and for billing-kit's schema if it is present.
+- `coverage()` is the audit of the opt-in: it reads `pg_class` /
+  `pg_policy` for every tenant-bearing table outside `tenancy.*` and names
+  the ones without enabled + forced RLS and a policy. A forgotten
+  `protect()` becomes a failing startup assertion instead of an incident.
 - `routedExecutor` is the whole database-per-tenant offering — LRU-bounded
   memoized routing over a function you write, with `dispose`/`close()` — because provisioning and per-database
   migrations are operational choices a library would only get wrong on your

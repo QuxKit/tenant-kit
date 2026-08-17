@@ -22,6 +22,7 @@ const EXPECTED = [
   'atLeast',
   'authorize',
   'can',
+  'coverage',
   'createTenancy',
   'createTenant',
   'createTenantWithOwner',
