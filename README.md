@@ -1,6 +1,10 @@
 # @quxkit/tenant-kit
 
+<img src="https://raw.githubusercontent.com/QuxKit/quxkit-brand/main/tenant-kit/sizes/tenant-kit-128.png" width="76" align="right" alt="">
+
 **QuxKit** · green stone · multi-tenancy
+
+![status](https://img.shields.io/badge/status-shipped-2ea043) ![licence](https://img.shields.io/badge/licence-Apache--2.0-3fb98f) ![npm](https://img.shields.io/badge/npm-%40quxkit%2Ftenant--kit-cb3837)
 
 Multi-tenancy as a library, for the app you already run.
 
