@@ -19,7 +19,7 @@
  *
  * Structurally identical to billing-kit's `SqlExecutor`, and deliberately so:
  * the two libraries are siblings, and an adapter written once over `pg.Pool`
- * (about ten lines — see `test/pg-executor.ts` for the proof) satisfies both.
+ * (a few dozen lines — `src/pg.ts`, shipped as `@quxkit/tenant-kit/pg`, is the proof) satisfies both.
  * An app running both kits carries one pool, not two.
  *
  * `query` returns rows as the driver produces them. `transaction` must pin

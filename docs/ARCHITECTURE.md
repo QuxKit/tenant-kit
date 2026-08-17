@@ -99,8 +99,8 @@ summary:
 - The directory tables themselves are **not** policied: they are what the
   resolve path reads before any scope exists. Isolation is for the host
   app's data, and for billing-kit's schema if it is present.
-- `routedExecutor` is the whole database-per-tenant offering — memoized
-  routing over a function you write — because provisioning and per-database
+- `routedExecutor` is the whole database-per-tenant offering — LRU-bounded
+  memoized routing over a function you write, with `dispose`/`close()` — because provisioning and per-database
   migrations are operational choices a library would only get wrong on your
   behalf.
 

@@ -59,7 +59,7 @@ Each of these was a production incident somewhere before it was a rule here.
   review and does nothing. `protect()` forces, unconditionally.
 - **Superusers bypass RLS regardless.** So your app must not connect as one,
   and the test suite makes a dedicated non-superuser role precisely so its
-  green checkmarks mean something (`test/pg-executor.ts` explains).
+  green checkmarks mean something (`test/harness.ts` explains).
 - **`SET LOCAL`, never `SET`.** A plain `SET` outlives its transaction; on a
   pooled connection the next borrower inherits the previous request's tenant.
   This is the classic RLS-on-a-pool bug, and it is why `scopedExecutor`
@@ -92,8 +92,10 @@ named that so the reach reads as deliberate.
 
 ## The other two strategies, honestly
 
-`routedExecutor(route)` memoizes `tenantId → SqlExecutor`. That is the whole
-offering, and the restraint is the point: the hard parts of physical
+`routedExecutor(route, { max, dispose })` memoizes `tenantId → SqlExecutor`
+in a least-recently-used cache bounded by `max` (default 100), calling
+`dispose` for what falls off — and `close()` for everything at shutdown.
+That is the whole offering, and the restraint is the point: the hard parts of physical
 isolation are **provisioning** (who creates the database when a tenant signs
 up at 3am), **migration fan-out** (a bad migration now fails per-tenant,
 partially), and **connection budgets** (every isolated tenant is a pool;
@@ -101,7 +103,8 @@ Postgres connections are not free). Those are operational decisions with
 your name on the pager, not defaults a library should pick.
 
 What the library does guarantee: the routing function is consulted once per
-tenant, the executor is reused, and everything downstream — including
+tenant while its executor is cached, the executor is reused, evicted
+executors are handed to `dispose` (end the pool there), and everything downstream — including
 billing-kit — sees the same `SqlExecutor` interface regardless of which
 strategy produced it. Moving one tenant from the shared database to its own
 is a change to your `route` function and a data copy, not an API migration.
