@@ -5,10 +5,9 @@
 // Run it with the commands in ./README.md. It needs a Postgres it may write
 // to; it creates a `demo` schema and drops it again at the end.
 
-import pg from 'pg';
-
 import { createTenancy, firstOf, fromHeader, fromSubdomain } from '@quxkit/tenant-kit';
 import { pgExecutor } from '@quxkit/tenant-kit/pg';
+import pg from 'pg';
 
 const url = process.env.DATABASE_URL ?? 'postgres://localhost:5432/tenant_kit_example';
 const pool = new pg.Pool({ connectionString: url });
@@ -38,7 +37,10 @@ console.log('resolved as', resolved.membership.role);
 await tenancy.withTenant(resolved, async (tx) => {
   await tx.query(`INSERT INTO demo.projects (tenant_id, name) VALUES ($1, 'first')`, [acme.id]);
   const rows = await tx.query<{ name: string }>('SELECT name FROM demo.projects');
-  console.log('scoped sees', rows.map((r) => r.name));
+  console.log(
+    'scoped sees',
+    rows.map((r) => r.name),
+  );
 });
 
 // The unscoped view of a protected table is empty, not everything — that is

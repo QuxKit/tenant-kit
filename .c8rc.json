@@ -7,6 +7,6 @@
   "extension": [".ts"],
   "reports-dir": "coverage",
   "lines": 95,
-  "functions": 95,
+  "functions": 100,
   "branches": 90
 }
