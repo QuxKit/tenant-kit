@@ -5,7 +5,13 @@ export { TenantScope } from './context.ts';
 
 export { TenancyError, type TenancyErrorCode, type TenancyFailure } from './errors.ts';
 export { createTenancy, type Tenancy, type TenancyOptions } from './instance.ts';
-export { routedExecutor, scopedExecutor, TENANT_SETTING } from './isolation.ts';
+export {
+  type RoutedExecutor,
+  type RoutedExecutorOptions,
+  routedExecutor,
+  scopedExecutor,
+  TENANT_SETTING,
+} from './isolation.ts';
 export {
   addMember,
   atLeast,

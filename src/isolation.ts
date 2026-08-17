@@ -89,26 +89,89 @@ function nested(tx: SqlExecutor, depth: number): SqlExecutor {
   return scoped;
 }
 
+/** What `routedExecutor` returns: the router itself, plus its lifecycle. */
+export interface RoutedExecutor {
+  (tenantId: TenantId): SqlExecutor;
+  /** How many executors are currently cached. */
+  readonly size: number;
+  /**
+   * Dispose every cached executor (via `dispose`, if given) and empty the
+   * cache. Routing after `close()` builds fresh executors; call it at
+   * shutdown.
+   */
+  close(): Promise<void>;
+}
+
+export interface RoutedExecutorOptions {
+  /**
+   * The most executors kept at once. Least-recently-used entries are evicted
+   * past this — and disposed, if `dispose` is given. Defaults to 100. Set it
+   * to the number of tenant databases you can hold connections to at once,
+   * not the number of tenants you have.
+   */
+  max?: number;
+  /**
+   * Called for an executor on eviction and on `close()`. This is where a
+   * pool gets ended; without it an evicted executor is dropped and its pool
+   * lives until it is garbage-collected (or forever, if it keeps timers).
+   */
+  dispose?: (db: SqlExecutor, tenantId: TenantId) => void | Promise<void>;
+}
+
 /**
  * Database-per-tenant (or schema-per-tenant) routing: the other end of the
  * isolation spectrum, where a tenant's isolation is that its rows live
  * somewhere else entirely.
  *
- * The kit's contribution is deliberately small — memoized routing over a
- * function you write — because the hard parts (provisioning, migrations per
- * database, connection budgets) are operational choices this library would
- * only get wrong on your behalf. docs/ISOLATION.md weighs when this shape is
- * worth that operational bill.
+ * The kit's contribution is deliberately small — a bounded, least-recently-
+ * used cache over a function you write — because the hard parts
+ * (provisioning, migrations per database, connection budgets) are
+ * operational choices this library would only get wrong on your behalf.
+ * docs/ISOLATION.md weighs when this shape is worth that operational bill.
+ *
+ * The bound is the difference between "one pool per tenant" and "one pool
+ * per tenant we have ever seen": with a thousand tenants and no bound, the
+ * process holds a thousand pools' worth of connections. `max` caps it and
+ * `dispose` lets you end the pool that falls off; `close()` ends them all.
  */
 export function routedExecutor(
   route: (tenantId: TenantId) => SqlExecutor,
-): (tenantId: TenantId) => SqlExecutor {
+  options: RoutedExecutorOptions = {},
+): RoutedExecutor {
+  const max = options.max ?? 100;
+  if (!Number.isInteger(max) || max < 1) throw new RangeError('routedExecutor: max must be >= 1');
+  const dispose = options.dispose ?? (() => {});
+  // Map iteration order is insertion order; deleting and re-inserting on a
+  // hit moves the entry to the back, so the front is always the LRU.
   const cache = new Map<TenantId, SqlExecutor>();
-  return (tenantId) => {
+
+  const router = ((tenantId: TenantId): SqlExecutor => {
     const hit = cache.get(tenantId);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      cache.delete(tenantId);
+      cache.set(tenantId, hit);
+      return hit;
+    }
     const db = route(tenantId);
     cache.set(tenantId, db);
+    if (cache.size > max) {
+      const [oldestId, oldest] = cache.entries().next().value as [TenantId, SqlExecutor];
+      cache.delete(oldestId);
+      // Disposal is fire-and-forget from the router's point of view — the
+      // caller wanted an executor, not to wait on someone else's pool ending
+      // — but a rejection must not become an unhandled one.
+      Promise.resolve()
+        .then(() => dispose(oldest, oldestId))
+        .catch(() => {});
+    }
     return db;
+  }) as RoutedExecutor & { size: number };
+
+  Object.defineProperty(router, 'size', { get: () => cache.size, enumerable: true });
+  router.close = async () => {
+    const entries = [...cache.entries()];
+    cache.clear();
+    await Promise.all(entries.map(([id, db]) => dispose(db, id)));
   };
+  return router;
 }
