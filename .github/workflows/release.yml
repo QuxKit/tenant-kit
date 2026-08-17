@@ -1,0 +1,62 @@
+# Release — on a `v*` tag: verify, then publish to npm with provenance.
+#
+# Needs an `NPM_TOKEN` repository secret (an npm granular access token with
+# publish rights on @quxkit). `id-token: write` is what lets npm attach a
+# provenance attestation to the published tarball.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tenant_kit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      REQUIRE_DB: '1'
+      TENANT_KIT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/tenant_kit_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+          pnpm test
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access restricted
