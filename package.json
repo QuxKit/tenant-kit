@@ -8,11 +8,11 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+http://localhost:3003/brett/tenant-kit.git"
+    "url": "git+https://github.com/QuxKit/tenant-kit.git"
   },
-  "homepage": "http://localhost:3003/brett/tenant-kit#readme",
+  "homepage": "https://github.com/QuxKit/tenant-kit#readme",
   "bugs": {
-    "url": "http://localhost:3003/brett/tenant-kit/issues"
+    "url": "https://github.com/QuxKit/tenant-kit/issues"
   },
   "keywords": [
     "multi-tenancy",
