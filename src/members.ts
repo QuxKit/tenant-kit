@@ -8,6 +8,7 @@
 // administer again without a DBA, and "ask the DBA" is not an API.
 
 import { TenancyError } from './errors.ts';
+import { type MutationMeta, record } from './events.ts';
 import { type TenantRow, toTenant } from './tenants.ts';
 import type {
   AddMemberInput,
@@ -121,6 +122,7 @@ export async function addMember(
   db: SqlExecutor,
   input: AddMemberInput,
   now: Date,
+  meta?: MutationMeta,
 ): Promise<Membership> {
   if (!isRoleName(input.role)) throw new TenancyError({ code: 'invalid_role', role: input.role });
   if (input.userId.trim().length === 0)
@@ -128,13 +130,23 @@ export async function addMember(
 
   const inserted = await db.transaction(async (tx) => {
     await assertRoleAssignable(tx, input.tenantId, input.role);
-    return tx.query<MembershipRow>(
+    const rows = await tx.query<MembershipRow>(
       `INSERT INTO tenancy.memberships (tenant_id, user_id, role, created_at)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (tenant_id, user_id) DO NOTHING
        RETURNING tenant_id, user_id, role, created_at`,
       [input.tenantId, input.userId, input.role, now],
     );
+    if (rows.length === 1)
+      await record(tx, {
+        tenantId: input.tenantId,
+        type: 'member_added',
+        payload: { userId: input.userId, role: input.role },
+        target: input.userId,
+        at: now,
+        meta,
+      });
+    return rows;
   });
   if (inserted.length === 1) return toMembership(inserted[0]);
 
@@ -225,6 +237,8 @@ export async function setRole(
   tenantId: TenantId,
   userId: UserId,
   role: Role,
+  now: Date,
+  meta?: MutationMeta,
 ): Promise<Membership> {
   if (!isRoleName(role)) throw new TenancyError({ code: 'invalid_role', role });
   return db.transaction(async (tx) => {
@@ -241,6 +255,14 @@ export async function setRole(
        RETURNING tenant_id, user_id, role, created_at`,
       [tenantId, userId, role],
     );
+    await record(tx, {
+      tenantId,
+      type: 'member_role_changed',
+      payload: { userId, from: current.role, to: role },
+      target: userId,
+      at: now,
+      meta,
+    });
     return toMembership(rows[0]);
   });
 }
@@ -254,6 +276,8 @@ export async function removeMember(
   db: SqlExecutor,
   tenantId: TenantId,
   userId: UserId,
+  now: Date,
+  meta?: MutationMeta,
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const { target, owners } = await lockOwnersAnd(tx, tenantId, userId);
@@ -264,5 +288,13 @@ export async function removeMember(
       tenantId,
       userId,
     ]);
+    await record(tx, {
+      tenantId,
+      type: 'member_removed',
+      payload: { userId, role: target.role },
+      target: userId,
+      at: now,
+      meta,
+    });
   });
 }

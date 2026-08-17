@@ -17,6 +17,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { TenancyError } from './errors.ts';
+import { type MutationMeta, record } from './events.ts';
 import { addMember, assertRoleAssignable, isRoleName } from './members.ts';
 import { getTenant } from './tenants.ts';
 import type {
@@ -130,7 +131,10 @@ export async function invite(
   input: InviteInput,
   now: Date,
   options: InvitationOptions = {},
+  meta?: MutationMeta,
 ): Promise<{ invitation: Invitation; token: string }> {
+  // The inviter is the actor unless the caller says otherwise.
+  const who: MutationMeta = { ...meta, actor: meta?.actor ?? input.invitedBy };
   if (!isRoleName(input.role)) throw new TenancyError({ code: 'invalid_role', role: input.role });
   if (input.invitedBy.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'invitedBy', reason: 'empty' });
@@ -147,11 +151,21 @@ export async function invite(
   const invitation = await db.transaction(async (tx) => {
     await lockInviteKey(tx, tenant.id, email);
     await assertRoleAssignable(tx, tenant.id, input.role);
-    await tx.query(
+    const superseded = await tx.query<{ id: string }>(
       `UPDATE tenancy.invitations SET state = 'revoked', revoked_at = $3
-        WHERE tenant_id = $1 AND email = $2 AND state = 'pending'`,
+        WHERE tenant_id = $1 AND email = $2 AND state = 'pending'
+        RETURNING id`,
       [tenant.id, email, now],
     );
+    for (const old of superseded)
+      await record(tx, {
+        tenantId: tenant.id,
+        type: 'invitation_revoked',
+        payload: { invitationId: old.id, superseded: true },
+        target: old.id,
+        at: now,
+        meta: who,
+      });
     const rows = await tx.query<InvitationRow>(
       `INSERT INTO tenancy.invitations
          (id, tenant_id, email, role, token_hash, invited_by, state, created_at, expires_at)
@@ -168,7 +182,16 @@ export async function invite(
         new Date(now.getTime() + ttl),
       ],
     );
-    return toInvitation(rows[0], now);
+    const created = toInvitation(rows[0], now);
+    await record(tx, {
+      tenantId: tenant.id,
+      type: 'invitation_issued',
+      payload: { invitationId: created.id, email, role: input.role, invitedBy: input.invitedBy },
+      target: created.id,
+      at: now,
+      meta: who,
+    });
+    return created;
   });
 
   await options.mailer?.({ kind: 'invite', tenant, invitation, token });
@@ -206,9 +229,12 @@ export async function acceptInvitation(
   db: SqlExecutor,
   input: { token: string; userId: UserId },
   now: Date,
+  meta?: MutationMeta,
 ): Promise<{ invitation: Invitation; membership: Membership }> {
   if (input.userId.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'userId', reason: 'empty' });
+  // The accepting user is the actor unless the caller says otherwise.
+  const who: MutationMeta = { ...meta, actor: meta?.actor ?? input.userId };
   const hash = hashInvitationToken(input.token);
   return db.transaction(async (tx) => {
     const rows = await tx.query<InvitationRow>(`${SELECT} WHERE token_hash = $1 FOR UPDATE`, [
@@ -224,6 +250,7 @@ export async function acceptInvitation(
         tx,
         { tenantId: found.tenantId, userId: input.userId, role: found.role },
         now,
+        who,
       );
       return { invitation: found, membership };
     }
@@ -236,6 +263,7 @@ export async function acceptInvitation(
       tx,
       { tenantId: found.tenantId, userId: input.userId, role: found.role },
       now,
+      who,
     );
     const updated = await tx.query<InvitationRow>(
       `UPDATE tenancy.invitations
@@ -244,6 +272,14 @@ export async function acceptInvitation(
        RETURNING ${COLUMNS}`,
       [found.id, now, input.userId],
     );
+    await record(tx, {
+      tenantId: found.tenantId,
+      type: 'invitation_accepted',
+      payload: { invitationId: found.id, userId: input.userId, role: found.role },
+      target: found.id,
+      at: now,
+      meta: who,
+    });
     return { invitation: toInvitation(updated[0], now), membership };
   });
 }
@@ -306,6 +342,7 @@ export async function revokeInvitation(
   db: SqlExecutor,
   id: string,
   now: Date,
+  meta?: MutationMeta,
 ): Promise<Invitation> {
   return db.transaction(async (tx) => {
     const rows = await tx.query<InvitationRow>(`${SELECT} WHERE id = $1 FOR UPDATE`, [id]);
@@ -323,6 +360,14 @@ export async function revokeInvitation(
         WHERE id = $1 RETURNING ${COLUMNS}`,
       [id, now],
     );
+    await record(tx, {
+      tenantId: found.tenantId,
+      type: 'invitation_revoked',
+      payload: { invitationId: id, superseded: false },
+      target: id,
+      at: now,
+      meta,
+    });
     return toInvitation(updated[0], now);
   });
 }
@@ -339,6 +384,7 @@ export async function resendInvitation(
   id: string,
   now: Date,
   options: InvitationOptions = {},
+  meta?: MutationMeta,
 ): Promise<{ invitation: Invitation; token: string }> {
   const ttl = options.ttlMs ?? DEFAULT_INVITATION_TTL_MS;
   const token = newToken();
@@ -360,6 +406,14 @@ export async function resendInvitation(
         WHERE id = $1 RETURNING ${COLUMNS}`,
       [id, hashInvitationToken(token), new Date(now.getTime() + ttl)],
     );
+    await record(tx, {
+      tenantId: found.tenantId,
+      type: 'invitation_resent',
+      payload: { invitationId: id },
+      target: id,
+      at: now,
+      meta,
+    });
     return toInvitation(updated[0], now);
   });
   const tenant = await getTenant(db, invitation.tenantId);
@@ -374,14 +428,29 @@ export async function resendInvitation(
  * whoever reads it directly, and a dashboard counting `state = 'pending'`
  * in SQL should agree with `list`. Returns how many rows changed.
  */
-export async function sweepExpiredInvitations(db: SqlExecutor, now: Date): Promise<number> {
-  const rows = await db.query<{ id: string }>(
-    `UPDATE tenancy.invitations SET state = 'expired'
-      WHERE state = 'pending' AND expires_at <= $1
-      RETURNING id`,
-    [now],
-  );
-  return rows.length;
+export async function sweepExpiredInvitations(
+  db: SqlExecutor,
+  now: Date,
+  meta?: MutationMeta,
+): Promise<number> {
+  return db.transaction(async (tx) => {
+    const rows = await tx.query<{ id: string; tenant_id: string }>(
+      `UPDATE tenancy.invitations SET state = 'expired'
+        WHERE state = 'pending' AND expires_at <= $1
+        RETURNING id, tenant_id`,
+      [now],
+    );
+    for (const row of rows)
+      await record(tx, {
+        tenantId: row.tenant_id,
+        type: 'invitation_expired',
+        payload: { invitationId: row.id },
+        target: row.id,
+        at: now,
+        meta,
+      });
+    return rows.length;
+  });
 }
 
 // --- test seam --------------------------------------------------------------

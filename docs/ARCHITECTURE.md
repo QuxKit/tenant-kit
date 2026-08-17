@@ -18,9 +18,11 @@ flowchart TD
     context["context.ts<br/>TenantScope (ALS)"]
     isolation["isolation.ts<br/>scopedExecutor, routedExecutor"]
     coverage["coverage.ts<br/>which tables RLS covers"]
+    events["events.ts<br/>outbox + audit, in-transaction"]
     instance["instance.ts<br/>createTenancy — binds db + clock"]
 
-    types --> tenants & members & resolve & context & isolation & coverage
+    types --> tenants & members & resolve & context & isolation & coverage & events
+    events --> tenants & members & invitations & roles
     errors --> tenants & members & resolve & context & isolation
     tenants --> resolve
     members --> resolve
@@ -117,6 +119,21 @@ summary:
   migrations are operational choices a library would only get wrong on your
   behalf.
 
+## 4a. Events and audit
+
+Every mutating function ends with `record(tx, …)` on its own transaction
+executor: an event row always, an audit row when `MutationMeta.actor` is
+known. Two failure modes this removes from the host app: publishing an
+event for a change that then rolls back, and committing a change whose
+publish then fails. `pollEvents` / `ackEvents` are the outbox drain; ids are
+assigned at insert time, so a consumer acks what it handled rather than
+keeping a high-water mark.
+
+The actor reaches the free functions as their last argument. The instance
+fills it from `as(actor)` when bound, else from the ambient
+`ResolvedTenant`'s membership — the user the request was resolved for —
+else leaves it absent (event, no audit row).
+
 ## 5. API design rules
 
 Inherited from billing-kit, restated because they are checkable in review:
@@ -146,6 +163,6 @@ Inherited from billing-kit, restated because they are checkable in review:
 | Users table, sessions, passwords | Auth is the host's. `UserId` is opaque; membership is checked, identity never. |
 | Email delivery | `invitations.ts` issues and accepts tokens; *sending* them is the `InvitationMailer` seam, because a mail transport is a dependency this library refuses to pick for you. |
 | An RBAC engine | `roles.ts` stores flat permission strings per role and matches `exact` / `ns:*` / `*`. Resources, relations and inheritance are an engine's job (OpenFGA, via tenant-kit-adapters). |
-| Tenant provisioning hooks / lifecycle events | Your job queue already exists; wrap `createTenant`. |
+| A message broker | `events.ts` writes an outbox row in the mutation's transaction; *delivering* it (`events.poll` → your queue → `events.ack`) is a worker you own, so a rolled-back mutation cannot publish and a committed one cannot go unpublished. |
 | A framework adapter | `RequestLike` is four optional fields; every framework produces it in two lines. An adapter package would make one framework the favorite. |
 | Caching of the directory | A tenant lookup is one indexed read. Cache in front if you must; the library returning stale memberships would be a security decision made for you. |

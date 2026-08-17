@@ -12,8 +12,21 @@ export {
 
 export { TenancyError, type TenancyErrorCode, type TenancyFailure } from './errors.ts';
 export {
+  type AuditEntry,
+  ackEvents,
+  listAudit,
+  listEvents,
+  type MutationMeta,
+  pollEvents,
+  record,
+  type TenancyEvent,
+  type TenancyEventType,
+} from './events.ts';
+export {
   createTenancy,
   type Tenancy,
+  type TenancyAudit,
+  type TenancyEvents,
   type TenancyInvitations,
   type TenancyOptions,
   type TenancyRoles,

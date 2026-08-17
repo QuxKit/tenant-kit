@@ -9,6 +9,7 @@ Numbered files, applied in order. Idempotent — every object is created
 | `002_rls.sql` | `tenancy.current_tenant()` and `tenancy.protect()` — the row-level-security machinery for the shared-schema strategy. |
 | `003_invitations.sql` | `tenancy.invitations`: hashed tokens, one pending per (tenant, email), expiry. |
 | `004_roles.sql` | `tenancy.roles`: per-tenant custom roles (name, permissions, rank); drops the built-in-only CHECK on `memberships.role`. |
+| `005_events.sql` | `tenancy.events` (the outbox) and `tenancy.audit_log`, both written inside the mutation's transaction. |
 
 Apply with anything that runs SQL files:
 
@@ -17,6 +18,7 @@ psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/002_rls.sql
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/003_invitations.sql
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/004_roles.sql
+psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/005_events.sql
 ```
 
 Then protect your own tables (once, in your own migrations):

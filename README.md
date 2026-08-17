@@ -100,6 +100,7 @@ psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/002_rls.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/003_invitations.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/004_roles.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/005_events.sql
 ```
 
 Wire it to any `pg.Pool` with the shipped adapter (`@quxkit/tenant-kit/pg`;
@@ -290,6 +291,49 @@ deeper: that is an RBAC engine's job.
   under `FOR UPDATE` on the role row, which every assignment of a custom
   role takes `FOR SHARE` on, so an assign racing a delete serializes.
 - **Per tenant.** A role defined in one tenant is `unknown_role` in another.
+
+## Lifecycle events and the audit log
+
+Every mutation writes a lifecycle event **in its own transaction**
+(`sql/005_events.sql`) — so an event cannot fire for a change that rolled
+back, and a change cannot commit without its event. Drain them like an
+outbox:
+
+```ts
+// a worker
+for (;;) {
+  const events = await tenancy.events.poll({ limit: 100 });
+  for (const e of events) await publish(e);      // e.type, e.tenantId, e.payload, e.actor, e.at
+  await tenancy.events.ack(events.map((e) => e.id));
+}
+```
+
+Event types: `tenant_created` / `tenant_renamed` / `tenant_archived` /
+`tenant_restored`, `member_added` / `member_role_changed` /
+`member_removed`, `invitation_issued` / `invitation_accepted` /
+`invitation_revoked` (`superseded: true` when a re-invite replaced it) /
+`invitation_resent` / `invitation_expired`, `role_defined` /
+`role_updated` / `role_deleted`. Idempotent no-ops (re-adding a member,
+archiving an archived tenant) write nothing. `events.list(tenantId)` is the
+tenant's timeline, acked or not. Ids are assigned at insert, not commit —
+ack what you handle rather than trusting "highest id seen" as a cursor.
+
+The **audit log** answers *who*, and is written by every mutating call when
+an actor is known:
+
+```ts
+await tenancy.as(me.id).setRole(tenantId, user.id, 'admin');
+// -> tenancy.audit_log: actor=me.id action=member_role_changed target=user.id metadata={from,to}
+
+// Inside run(resolved, …) / withTenant(resolved, …) the resolved user is the actor
+// automatically; invite() attributes to invitedBy and accept() to the acceptor.
+await tenancy.audit.list(tenantId, { limit: 50, before, actor });
+```
+
+`as(actor, metadata?)` returns the same instance bound to that actor
+(`metadata` is merged into every audit row it writes). Without an actor,
+events are still written and audit rows are not. The free functions take a
+trailing `MutationMeta` (`{ actor, metadata }`).
 
 ## The two-halves rule
 

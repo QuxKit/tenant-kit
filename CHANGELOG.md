@@ -33,6 +33,17 @@ adheres to [Semantic Versioning](https://semver.org/).
   `protected` (RLS enabled + forced + at least one policy) and
   `unprotected` (with `gaps`: `rls_disabled`, `rls_not_forced`,
   `no_policy`). Works as the non-superuser app role.
+- Lifecycle events outbox and audit log (`sql/005_events.sql`):
+  `tenancy.events` is written in the same transaction as every mutation
+  (`tenant_*`, `member_*`, `invitation_*`, `role_*`; no-ops write nothing);
+  `tenancy.events.poll({ after, limit })` / `.ack(ids)` / `.list(tenantId)`.
+  `tenancy.audit_log` (actor, action, target, at, metadata) is written by
+  every mutating call when an actor is known: `tenancy.as(actor, metadata?)`
+  binds one explicitly, the ambient `ResolvedTenant`'s user is used inside
+  `run` / `withTenant`, `invite` attributes to `invitedBy` and `accept` to
+  the acceptor; `tenancy.audit.list(tenantId, { limit, before, actor })`.
+  Free functions take a trailing `MutationMeta`; `record()` is exported for
+  host mutations that want to write into the same outbox.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only
@@ -54,6 +65,9 @@ adheres to [Semantic Versioning](https://semver.org/).
   is unreachable); public-surface and harness sanity tests.
 
 ### Changed
+- `setRole`, `removeMember`, `renameTenant`, `restoreTenant`, `deleteRole`
+  (free functions) now take `now: Date` — every mutation carries a
+  timestamp for its event. The instance methods are unchanged.
 - `tenancy.memberships.role` is no longer CHECK-constrained to the three
   built-in names (`004_roles.sql` drops it); the library validates roles
   against `tenancy.roles`.

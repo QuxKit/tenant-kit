@@ -21,6 +21,7 @@
 // sees the other's outcome.
 
 import { TenancyError } from './errors.ts';
+import { type MutationMeta, record } from './events.ts';
 import { getMembership, isBuiltinRole, isRoleName } from './members.ts';
 import type {
   BuiltinRole,
@@ -166,6 +167,7 @@ export async function defineRole(
   db: SqlExecutor,
   input: DefineRoleInput,
   now: Date,
+  meta?: MutationMeta,
 ): Promise<RoleDefinition> {
   validateRoleName(input.name);
   const permissions = normalizePermissions(input.permissions);
@@ -177,13 +179,25 @@ export async function defineRole(
       reason: 'must be a non-negative integer',
     });
 
-  const inserted = await db.query<RoleRow>(
-    `INSERT INTO tenancy.roles (tenant_id, name, permissions, rank, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $5)
-     ON CONFLICT (tenant_id, name) DO NOTHING
-     RETURNING ${COLUMNS}`,
-    [input.tenantId, input.name, permissions, rank, now],
-  );
+  const inserted = await db.transaction(async (tx) => {
+    const rows = await tx.query<RoleRow>(
+      `INSERT INTO tenancy.roles (tenant_id, name, permissions, rank, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5)
+       ON CONFLICT (tenant_id, name) DO NOTHING
+       RETURNING ${COLUMNS}`,
+      [input.tenantId, input.name, permissions, rank, now],
+    );
+    if (rows.length === 1)
+      await record(tx, {
+        tenantId: input.tenantId,
+        type: 'role_defined',
+        payload: { name: input.name, permissions, rank },
+        target: input.name,
+        at: now,
+        meta,
+      });
+    return rows;
+  });
   if (inserted.length === 1) return toRole(inserted[0]);
 
   const existing = await getRole(db, input.tenantId, input.name);
@@ -206,6 +220,7 @@ export async function updateRole(
   name: string,
   patch: { permissions?: string[]; rank?: number },
   now: Date,
+  meta?: MutationMeta,
 ): Promise<RoleDefinition> {
   if (isBuiltinRole(name))
     throw new TenancyError({
@@ -221,17 +236,28 @@ export async function updateRole(
       field: 'rank',
       reason: 'must be a non-negative integer',
     });
-  const rows = await db.query<RoleRow>(
-    `UPDATE tenancy.roles
-        SET permissions = COALESCE($3, permissions),
-            rank        = COALESCE($4, rank),
-            updated_at  = $5
-      WHERE tenant_id = $1 AND name = $2
-      RETURNING ${COLUMNS}`,
-    [tenantId, name, permissions, patch.rank ?? null, now],
-  );
-  if (rows.length === 0) throw new TenancyError({ code: 'unknown_role', tenantId, role: name });
-  return toRole(rows[0]);
+  return db.transaction(async (tx) => {
+    const rows = await tx.query<RoleRow>(
+      `UPDATE tenancy.roles
+          SET permissions = COALESCE($3, permissions),
+              rank        = COALESCE($4, rank),
+              updated_at  = $5
+        WHERE tenant_id = $1 AND name = $2
+        RETURNING ${COLUMNS}`,
+      [tenantId, name, permissions, patch.rank ?? null, now],
+    );
+    if (rows.length === 0) throw new TenancyError({ code: 'unknown_role', tenantId, role: name });
+    const role = toRole(rows[0]);
+    await record(tx, {
+      tenantId,
+      type: 'role_updated',
+      payload: { name, permissions: role.permissions, rank: role.rank },
+      target: name,
+      at: now,
+      meta,
+    });
+    return role;
+  });
 }
 
 /**
@@ -242,7 +268,13 @@ export async function updateRole(
  * delete lands on one side or the other, never through the middle.
  * Idempotent: deleting a role that does not exist is a no-op.
  */
-export async function deleteRole(db: SqlExecutor, tenantId: TenantId, name: string): Promise<void> {
+export async function deleteRole(
+  db: SqlExecutor,
+  tenantId: TenantId,
+  name: string,
+  now: Date,
+  meta?: MutationMeta,
+): Promise<void> {
   if (isBuiltinRole(name))
     throw new TenancyError({
       code: 'invalid_role',
@@ -273,6 +305,14 @@ export async function deleteRole(db: SqlExecutor, tenantId: TenantId, name: stri
       tenantId,
       name,
     ]);
+    await record(tx, {
+      tenantId,
+      type: 'role_deleted',
+      payload: { name },
+      target: name,
+      at: now,
+      meta,
+    });
   });
 }
 

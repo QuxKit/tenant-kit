@@ -20,6 +20,15 @@
 import { TenantScope } from './context.ts';
 import { type CoverageOptions, type CoverageReport, coverage } from './coverage.ts';
 import {
+  type AuditEntry,
+  ackEvents,
+  listAudit,
+  listEvents,
+  type MutationMeta,
+  pollEvents,
+  type TenancyEvent,
+} from './events.ts';
+import {
   acceptInvitation,
   getInvitation,
   invite,
@@ -96,6 +105,23 @@ export interface TenancyOptions {
   invitationMailer?: InvitationMailer;
   /** Default invitation lifetime; seven days unless set. Per-call `ttlMs` wins. */
   invitationTtlMs?: number;
+}
+
+/** The outbox and the tenant timeline. */
+export interface TenancyEvents {
+  /** Unacked events in id order; ack what you handle. */
+  poll(query?: { after?: number; limit?: number }): Promise<TenancyEvent[]>;
+  ack(ids: readonly number[]): Promise<number>;
+  /** One tenant's events, acked or not, oldest first. */
+  list(tenantId: TenantId, query?: { after?: number; limit?: number }): Promise<TenancyEvent[]>;
+}
+
+/** The audit trail: who did what, per tenant. */
+export interface TenancyAudit {
+  list(
+    tenantId: TenantId,
+    query?: { limit?: number; before?: number; actor?: UserId },
+  ): Promise<AuditEntry[]>;
 }
 
 /** Custom roles and permission questions, namespaced on the instance. */
@@ -213,30 +239,58 @@ export interface Tenancy {
 
   // roles and permissions
   roles: TenancyRoles;
+
+  // lifecycle events and audit
+  events: TenancyEvents;
+  audit: TenancyAudit;
+
+  /**
+   * The same instance, with every mutation attributed to `actor` in the
+   * audit log (and on the event). Without it, the actor is the ambient
+   * `ResolvedTenant`'s user when there is one — inside `run(resolved, …)`
+   * or `withTenant(resolved, …)` — and absent otherwise, in which case
+   * events are still written and audit rows are not. `metadata` is merged
+   * into every audit row this handle writes.
+   */
+  as(actor: UserId, metadata?: Record<string, unknown>): Tenancy;
 }
 
 export function createTenancy(options: TenancyOptions): Tenancy {
+  return build(options, new TenantScope(), undefined);
+}
+
+function build(
+  options: TenancyOptions,
+  scope: TenantScope,
+  bound: MutationMeta | undefined,
+): Tenancy {
   const { db, reservedSlugs } = options;
   const clock: Clock = options.clock ?? (() => new Date());
-  const scope = new TenantScope();
   const invitationOptions = { mailer: options.invitationMailer, ttlMs: options.invitationTtlMs };
+  // Who is acting: the explicit `as(actor)`, else the ambient resolved user.
+  const meta = (): MutationMeta | undefined => {
+    if (bound !== undefined) return bound;
+    const actor = scope.current()?.membership?.userId;
+    return actor === undefined ? undefined : { actor };
+  };
 
   return {
-    createTenant: (input) => createTenant(db, input, clock(), reservedSlugs),
-    createTenantWithOwner: (input) => createTenantWithOwner(db, input, clock(), reservedSlugs),
+    createTenant: (input) => createTenant(db, input, clock(), reservedSlugs, meta()),
+    createTenantWithOwner: (input) =>
+      createTenantWithOwner(db, input, clock(), reservedSlugs, meta()),
     getTenant: (id) => getTenant(db, id),
     getTenantBySlug: (slug) => getTenantBySlug(db, slug),
     listTenants: (query) => listTenants(db, query),
-    renameTenant: (id, name) => renameTenant(db, id, name),
-    archiveTenant: (id) => archiveTenant(db, id, clock()),
-    restoreTenant: (id) => restoreTenant(db, id),
+    renameTenant: (id, name) => renameTenant(db, id, name, clock(), meta()),
+    archiveTenant: (id) => archiveTenant(db, id, clock(), meta()),
+    restoreTenant: (id) => restoreTenant(db, id, clock(), meta()),
 
-    addMember: (input) => addMember(db, input, clock()),
+    addMember: (input) => addMember(db, input, clock(), meta()),
     getMembership: (tenantId, userId) => getMembership(db, tenantId, userId),
     listMembers: (tenantId) => listMembers(db, tenantId),
     tenantsOf: (userId) => tenantsOf(db, userId),
-    setRole: (tenantId, userId, role) => setRole(db, tenantId, userId, role),
-    removeMember: (tenantId, userId) => removeMember(db, tenantId, userId),
+    setRole: (tenantId, userId, role) => setRole(db, tenantId, userId, role, clock(), meta()),
+    removeMember: (tenantId, userId) => removeMember(db, tenantId, userId, clock(), meta()),
 
     resolve: (req, opts) => resolve(db, req, opts),
     authorize: (claim, userId) => authorize(db, claim, userId),
@@ -254,19 +308,19 @@ export function createTenancy(options: TenancyOptions): Tenancy {
     coverage: (opts) => coverage(db, opts),
 
     invitations: {
-      invite: (input) => invite(db, input, clock(), invitationOptions),
-      accept: (input) => acceptInvitation(db, input, clock()),
+      invite: (input) => invite(db, input, clock(), invitationOptions, meta()),
+      accept: (input) => acceptInvitation(db, input, clock(), meta()),
       get: (id) => getInvitation(db, id, clock()),
       list: (tenantId, query) => listInvitations(db, tenantId, clock(), query),
-      revoke: (id) => revokeInvitation(db, id, clock()),
-      resend: (id) => resendInvitation(db, id, clock(), invitationOptions),
-      sweepExpired: () => sweepExpiredInvitations(db, clock()),
+      revoke: (id) => revokeInvitation(db, id, clock(), meta()),
+      resend: (id) => resendInvitation(db, id, clock(), invitationOptions, meta()),
+      sweepExpired: () => sweepExpiredInvitations(db, clock(), meta()),
     },
 
     roles: {
-      define: (input) => defineRole(db, input, clock()),
-      update: (tenantId, name, patch) => updateRole(db, tenantId, name, patch, clock()),
-      delete: (tenantId, name) => deleteRole(db, tenantId, name),
+      define: (input) => defineRole(db, input, clock(), meta()),
+      update: (tenantId, name, patch) => updateRole(db, tenantId, name, patch, clock(), meta()),
+      delete: (tenantId, name) => deleteRole(db, tenantId, name, clock(), meta()),
       get: (tenantId, name) => getRole(db, tenantId, name),
       list: (tenantId) => listRoles(db, tenantId),
       can: (tenantId, userId, permission) => can(db, tenantId, userId, permission),
@@ -274,5 +328,16 @@ export function createTenancy(options: TenancyOptions): Tenancy {
       require: (tenantId, userId, permission) =>
         requirePermission(db, tenantId, userId, permission),
     },
+
+    events: {
+      poll: (query) => pollEvents(db, query),
+      ack: (ids) => ackEvents(db, ids, clock()),
+      list: (tenantId, query) => listEvents(db, tenantId, query),
+    },
+    audit: {
+      list: (tenantId, query) => listAudit(db, tenantId, query),
+    },
+
+    as: (actor, metadata) => build(options, scope, { actor, metadata }),
   };
 }
