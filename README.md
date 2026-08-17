@@ -1,47 +1,40 @@
-# tenant-kit
+# @quxkit/tenant-kit
+
+**QuxKit** · green stone · multi-tenancy
 
 Multi-tenancy as a library, for the app you already run.
 
-```mermaid
-flowchart LR
-    req(["request"])
+```
+ request
+   │
+   ▼
+ extract       claim, untrusted            ─┐
+   │ TenantClaim                            │
+   ▼                                        │  @quxkit/tenant-kit
+ authorize     directory + membership       │  Apache-2.0
+   │ ResolvedTenant                         │
+   ▼                                        │
+ context       ambient tenant ──▶ handlers  │
+   │                                        │
+   ▼                                        │
+ isolation     RLS-scoped executor         ─┘
+   │ SET LOCAL, per transaction
+   ▼
+ your tables   tenancy.protect()
 
-    subgraph TK["tenant-kit — Apache-2.0"]
-        direction LR
-        ex["extract<br/>claim, untrusted"]
-        az["authorize<br/>directory + membership"]
-        ctx["context<br/>ambient tenant"]
-        iso["isolation<br/>RLS-scoped executor"]
-        ex -->|TenantClaim| az
-        az -->|ResolvedTenant| ctx
-        ctx --> iso
-    end
-
-    subgraph HOST["your app"]
-        h["handlers"]
-        db[("your tables<br/>tenancy.protect()")]
-    end
-
-    req --> ex
-    iso -->|"SET LOCAL, per txn"| db
-    ctx --> h
-    h --> iso
-
-    classDef own fill:#0d9488,stroke:#0f766e,color:#ffffff;
-    classDef host fill:#1e293b,stroke:#0f172a,color:#e2e8f0;
-    class ex,az,ctx,iso own;
-    class h,db host;
-    class req host;
+ Extraction never authorizes; authorization never trusts the request.
 ```
 
-tenant-kit owns the teal boxes: what a tenant **is** (a directory of tenants
+_Rendered diagrams (mermaid): [docs/DIAGRAMS.md](https://github.com/QuxKit/tenant-kit/blob/main/docs/DIAGRAMS.md)._
+
+tenant-kit owns the framed column: what a tenant **is** (a directory of tenants
 and memberships), how a request **becomes** one (extraction, then
 authorization — never one without the other), how the current tenant travels
 through your code (AsyncLocalStorage), and how the database refuses to serve
 anyone else's rows (row-level security you turn on per table). Your app owns
 everything else — its users, its auth, its tables, its permissions.
 
-Apache-2.0, sibling to [billing-kit](http://localhost:3003/brett/billing-kit):
+Apache-2.0, sibling to [billing-kit](https://github.com/QuxKit/billing-kit):
 same license, same executor interface, same design rules. A tenant resolved
 here is the `tenantId` on every usage event there — see
 [docs/BILLING_KIT.md](docs/BILLING_KIT.md).
@@ -86,10 +79,17 @@ defends a piece of it:
   which consumes the `tenantId` this library produces. Neither imports the
   other.
 
+The systems on the other side of that line plug in through
+[tenant-kit-adapters](https://github.com/QuxKit/tenant-kit-adapters):
+enterprise SSO over any OIDC IdP (per-tenant connections, group→role
+mapping, JIT provisioning), SCIM 2.0 directory provisioning, and
+role-mirroring bridges into RBAC engines like OpenFGA — each one an adapter
+conforming to a small contract, none of them moving the scope line.
+
 ## Quickstart
 
 ```sh
-pnpm add tenant-kit
+pnpm add @quxkit/tenant-kit
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/002_rls.sql
 ```
@@ -99,7 +99,7 @@ Wire it to any `pg.Pool` (the ~10-line adapter is in
 executor too):
 
 ```ts
-import { createTenancy, firstOf, fromSubdomain, fromHeader } from 'tenant-kit';
+import { createTenancy, firstOf, fromSubdomain, fromHeader } from '@quxkit/tenant-kit';
 
 const tenancy = createTenancy({ db });
 
@@ -191,3 +191,20 @@ customer list from your status codes.)
 Node ≥ 20.19, Postgres ≥ 14 for the RLS strategy (the directory alone works
 anywhere the `SqlExecutor` interface reaches). Zero runtime dependencies;
 `pg` is the test harness's, not the library's.
+
+
+## The QuxKit family
+
+Libraries you embed, not services you operate. Each kit owns one narrow thing
+and composes with the rest over shared shapes — one executor interface, one
+opaque tenant id, one Money type.
+
+| Package | Stone | What it owns |
+|---|---|---|
+| [`@quxkit/identity-kit`](https://github.com/QuxKit/identity-kit) | gold | Accounts, argon2id credentials, revocable sessions — produces a `UserId`. |
+| [`@quxkit/tenant-kit`](https://github.com/QuxKit/tenant-kit) | green | Tenant directory, request→tenant resolution, row-level-security isolation. |
+| [`@quxkit/billing-kit`](https://github.com/QuxKit/billing-kit) | blue | Metering, exact pricing, a double-entry ledger, provider settlement. |
+| [`@quxkit/billing-kit-adapters`](https://github.com/QuxKit/billing-kit-adapters) | blue | Payment providers beyond Stripe and Paddle. |
+| [`tenant-kit-adapters`](https://github.com/QuxKit/tenant-kit-adapters) | green | Enterprise SSO, SCIM provisioning, RBAC-engine bridges. |
+| [`billing-kit-components`](https://github.com/QuxKit/billing-kit-components) | blue | shadcn-compatible billing UI, per seat. |
+| [`@quxkit/billing-kit-mcp`](https://github.com/QuxKit/billing-kit-mcp) | blue | Exact money math for AI assistants over MCP. |

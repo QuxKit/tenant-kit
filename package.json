@@ -1,18 +1,18 @@
 {
-  "name": "tenant-kit",
+  "name": "@quxkit/tenant-kit",
   "version": "0.1.0",
-  "description": "Multi-tenancy as a library — tenant identity, membership, resolution and isolation for the app you already run.",
+  "description": "Multi-tenancy as a library \u2014 tenant identity, membership, resolution and isolation for the app you already run.",
   "license": "Apache-2.0",
   "author": "BRETT",
   "type": "module",
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+http://localhost:3003/brett/tenant-kit.git"
+    "url": "git+https://github.com/QuxKit/tenant-kit.git"
   },
-  "homepage": "http://localhost:3003/brett/tenant-kit#readme",
+  "homepage": "https://github.com/QuxKit/tenant-kit#readme",
   "bugs": {
-    "url": "http://localhost:3003/brett/tenant-kit/issues"
+    "url": "https://github.com/QuxKit/tenant-kit/issues"
   },
   "keywords": [
     "multi-tenancy",
@@ -58,7 +58,7 @@
     "prepublishOnly": "pnpm run build && pnpm test && pnpm run typecheck"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "restricted"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

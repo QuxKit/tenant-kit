@@ -50,9 +50,9 @@ flowchart LR
 ## Wiring
 
 ```ts
-import { createTenancy, firstOf, fromSubdomain, fromClaim } from 'tenant-kit';
-import { createBilling } from 'billing-kit';
-import { Quantity } from 'billing-kit';
+import { createTenancy, firstOf, fromSubdomain, fromClaim } from '@quxkit/tenant-kit';
+import { createBilling } from '@quxkit/billing-kit';
+import { Quantity } from '@quxkit/billing-kit';
 
 const db = fromPool(pool);            // one adapter serves both kits
 
@@ -130,7 +130,7 @@ executor:
 
 ```ts
 // worker process
-import { createSubscriptions } from 'billing-kit/subscriptions';
+import { createSubscriptions } from '@quxkit/billing-kit/subscriptions';
 
 const subs = createSubscriptions({ db: tenancy.unscopedDb() });
 await subs.chargeDueSubscriptions(opts); // must see every tenant's due rows
@@ -158,7 +158,7 @@ Because both kits speak `SqlExecutor`, database-per-tenant routing moves
 them together:
 
 ```ts
-import { routedExecutor } from 'tenant-kit';
+import { routedExecutor } from '@quxkit/tenant-kit';
 
 const dbFor = routedExecutor((tenantId) =>
   tenantId === WHALE ? fromPool(whalePool) : fromPool(sharedPool));
