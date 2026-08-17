@@ -41,6 +41,16 @@ export type TenancyFailure =
   | { code: 'last_owner'; tenantId: TenantId; userId: UserId }
   | { code: 'forbidden'; tenantId: TenantId; userId: UserId; need: Role; have: Role }
 
+  // --- invitations ---------------------------------------------------------
+  /** No invitation for the token or id. Tokens are looked up by hash, so a
+   *  tampered token and a never-issued one are the same failure. */
+  | { code: 'unknown_invitation'; ref: string }
+  | { code: 'invitation_expired'; invitationId: string; expiresAt: Date }
+  | { code: 'invitation_revoked'; invitationId: string }
+  /** Already accepted by a different user. The same user accepting again is
+   *  idempotent and does not raise this. */
+  | { code: 'invitation_taken'; invitationId: string; acceptedBy: UserId }
+
   // --- resolution ----------------------------------------------------------
   /** No strategy found anything in the request to even claim a tenant. */
   | { code: 'no_tenant_claim' }
@@ -75,6 +85,14 @@ function describe(failure: TenancyFailure): string {
       return `user ${failure.userId} is the last owner of tenant ${failure.tenantId}`;
     case 'forbidden':
       return `user ${failure.userId} is ${failure.have} in tenant ${failure.tenantId}; ${failure.need} required`;
+    case 'unknown_invitation':
+      return `no invitation for ${failure.ref}`;
+    case 'invitation_expired':
+      return `invitation ${failure.invitationId} expired at ${failure.expiresAt.toISOString()}`;
+    case 'invitation_revoked':
+      return `invitation ${failure.invitationId} was revoked`;
+    case 'invitation_taken':
+      return `invitation ${failure.invitationId} was already accepted by ${failure.acceptedBy}`;
     case 'no_tenant_claim':
       return `no tenant claim found in the request`;
     case 'no_tenant_context':

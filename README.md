@@ -96,6 +96,7 @@ conforming to a small contract, none of them moving the scope line.
 pnpm add @quxkit/tenant-kit pg
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/002_rls.sql
+psql "$DATABASE_URL" -f node_modules/@quxkit/tenant-kit/sql/003_invitations.sql
 ```
 
 Wire it to any `pg.Pool` with the shipped adapter (`@quxkit/tenant-kit/pg`;
@@ -174,6 +175,59 @@ the forgotten-WHERE bug degrades from a data leak to a bug report.
 Nested `transaction()` calls inside any of these are savepoints: an inner
 failure you catch rolls back only the inner work.
 
+## Invitations
+
+Bringing someone into a tenant is a workflow, not a directory write, and it is
+the one every app rebuilds — a token table, an expiry, a revoke button, and
+the bugs where a token is accepted twice or by the wrong person. tenant-kit
+ships it (`sql/003_invitations.sql`):
+
+```ts
+const tenancy = createTenancy({
+  db,
+  invitationMailer: async ({ tenant, invitation, token }) => {
+    await mail.send({ to: invitation.email, subject: `Join ${tenant.name}`,
+      text: `https://app.example.com/join?token=${token}` });
+  },
+});
+
+// Owner or admin, in your handler:
+const { invitation, token } = await tenancy.invitations.invite({
+  tenantId, email: 'dev@example.com', role: 'member', invitedBy: me.id, ttlMs: 3 * 86_400_000,
+});
+// `token` is returned exactly once; only its sha256 is stored.
+
+// The invitee, after your auth layer has identified them:
+const { membership } = await tenancy.invitations.accept({ token, userId: user.id });
+
+await tenancy.invitations.list(tenantId, { state: 'pending' });
+await tenancy.invitations.revoke(invitation.id);
+await tenancy.invitations.resend(invitation.id);   // fresh token + expiry, old token dead
+await tenancy.invitations.sweepExpired();          // housekeeping; a cron job's one line
+```
+
+What the library holds:
+
+- **The token is a bearer credential** — random, hashed at rest, single-use
+  per user. tenant-kit has no users table, so it cannot check that the
+  accepting user *is* the invited email; possession is the proof, and the
+  invitation binds to the first user who accepts.
+- **Accepting is idempotent for that user** and `invitation_taken` for anyone
+  else; expired (by time, sweep or not) is `invitation_expired`; revoked or
+  superseded is `invitation_revoked`; tampered, guessed or unknown is
+  `unknown_invitation` — the hash lookup does not distinguish them.
+- **One pending invitation per (tenant, email).** A fresh `invite` for an
+  address supersedes the old one under an advisory lock, and a partial unique
+  index backs that up.
+- **The mailer runs after commit.** If delivery throws, the invitation exists
+  and `resend` sends it again. `memoryInvitationMailer()` collects messages
+  for tests. Without a mailer, the token is still returned for you to
+  deliver.
+
+The free functions (`invite`, `acceptInvitation`, `revokeInvitation`,
+`listInvitations`, `resendInvitation`, `sweepExpiredInvitations`) take
+`(db, …, now)` like everything else.
+
 ## The two-halves rule
 
 The API's one security idea, worth stating outside a docstring:
@@ -202,15 +256,19 @@ Every failure is a `TenancyError` whose `failure.code` is one of:
 | Code | Raised by | Meaning |
 |---|---|---|
 | `invalid_slug` | `createTenant`, `validateSlug` | not a DNS label, or reserved (`reason` says which) |
-| `invalid_tenant` | `createTenant`, `renameTenant`, `addMember` | an empty `name`, `userId` or `owner` (`field`) |
+| `invalid_tenant` | `createTenant`, `renameTenant`, `addMember`, `invitations.invite` | an empty `name`, `userId`, `owner`, `invitedBy`, a bad `email` or `ttlMs` (`field`) |
 | `slug_taken` | `createTenant`, `createTenantWithOwner` | the slug exists with a different name/state — or, on the owner path, without you as an owner (`detail`) |
 | `unknown_tenant` | lookups, `authorize` | no tenant for `ref` |
 | `tenant_archived` | `authorize`, `resolve` | the tenant exists but is archived |
-| `invalid_role` | `addMember`, `setRole` | not one of `owner`/`admin`/`member` |
+| `invalid_role` | `addMember`, `setRole`, `invitations.invite` | not one of `owner`/`admin`/`member` |
 | `not_a_member` | `getMembership`, `setRole`, `authorize` | no membership row |
 | `already_a_member` | `addMember` | the user is a member with a different role |
 | `last_owner` | `setRole`, `removeMember` | the change would leave zero owners |
 | `forbidden` | `requireRole` | `have` does not cover `need` |
+| `unknown_invitation` | `invitations.*` | no invitation for the token or id (tampered tokens land here too) |
+| `invitation_expired` | `invitations.accept` | the token has timed out (`expiresAt`) |
+| `invitation_revoked` | `invitations.accept`, `.resend` | revoked, or superseded by a newer invite |
+| `invitation_taken` | `invitations.accept`, `.revoke`, `.resend` | already accepted by `acceptedBy`, who is not you |
 | `no_tenant_claim` | `resolve` | no extractor claimed anything |
 | `no_tenant_context` | `require`, `db()`, `scopedExecutor` | outside `run`, or an empty tenant id |
 

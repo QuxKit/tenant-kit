@@ -7,12 +7,14 @@ Numbered files, applied in order. Idempotent — every object is created
 |---|---|
 | `001_core.sql` | The `tenancy` schema: `tenants`, `memberships`. |
 | `002_rls.sql` | `tenancy.current_tenant()` and `tenancy.protect()` — the row-level-security machinery for the shared-schema strategy. |
+| `003_invitations.sql` | `tenancy.invitations`: hashed tokens, one pending per (tenant, email), expiry. |
 
 Apply with anything that runs SQL files:
 
 ```sh
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/001_core.sql
 psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/002_rls.sql
+psql "$DATABASE_URL" -f node_modules/tenant-kit/sql/003_invitations.sql
 ```
 
 Then protect your own tables (once, in your own migrations):

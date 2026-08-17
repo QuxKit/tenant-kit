@@ -12,6 +12,7 @@ flowchart TD
     errors["errors.ts<br/>TenancyFailure union"]
     tenants["tenants.ts<br/>directory: tenants"]
     members["members.ts<br/>directory: memberships"]
+    invitations["invitations.ts<br/>workflow: invite → accept"]
     resolve["resolve.ts<br/>extract → authorize"]
     context["context.ts<br/>TenantScope (ALS)"]
     isolation["isolation.ts<br/>scopedExecutor, routedExecutor"]
@@ -21,13 +22,15 @@ flowchart TD
     errors --> tenants & members & resolve & context & isolation
     tenants --> resolve
     members --> resolve
-    tenants & members & resolve & context & isolation --> instance
+    tenants & members --> invitations
+    tenants & members & invitations & resolve & context & isolation --> instance
 ```
 
 `types.ts` and `errors.ts` have no dependencies and no runtime logic beyond
 the error class; everything else depends on them and not on each other,
 except `resolve.ts`, which is exactly the module whose job is to join the
-directory to the request. `instance.ts` is sugar: it binds `(db, clock)` once
+directory to the request, and `invitations.ts`, which is a workflow *over*
+the directory (it ends in `addMember`) and so depends on both halves of it. `instance.ts` is sugar: it binds `(db, clock)` once
 and owns the `TenantScope`, and every free function stays exported for
 callers holding a transaction or composing their own instance.
 
@@ -131,7 +134,7 @@ Inherited from billing-kit, restated because they are checkable in review:
 | Absent | Why |
 |---|---|
 | Users table, sessions, passwords | Auth is the host's. `UserId` is opaque; membership is checked, identity never. |
-| Invitations, email flows | Workflow, not directory. Build on `addMember` with your own token table. |
+| Email delivery | `invitations.ts` issues and accepts tokens; *sending* them is the `InvitationMailer` seam, because a mail transport is a dependency this library refuses to pick for you. |
 | Permissions beyond three roles | Application vocabulary. `atLeast` is the only comparison the library will ever do. |
 | Tenant provisioning hooks / lifecycle events | Your job queue already exists; wrap `createTenant`. |
 | A framework adapter | `RequestLike` is four optional fields; every framework produces it in two lines. An adapter package would make one framework the favorite. |

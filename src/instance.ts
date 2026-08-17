@@ -18,6 +18,15 @@
 // them, not a replacement.
 
 import { TenantScope } from './context.ts';
+import {
+  acceptInvitation,
+  getInvitation,
+  invite,
+  listInvitations,
+  resendInvitation,
+  revokeInvitation,
+  sweepExpiredInvitations,
+} from './invitations.ts';
 import { scopedExecutor } from './isolation.ts';
 import {
   addMember,
@@ -43,6 +52,10 @@ import type {
   Clock,
   CreateTenantInput,
   Extractor,
+  Invitation,
+  InvitationMailer,
+  InvitationState,
+  InviteInput,
   Logger,
   Membership,
   RequestLike,
@@ -63,6 +76,31 @@ export interface TenancyOptions {
   logger?: Logger;
   /** Overrides `RESERVED_SLUGS` for deployments with their own reserved surface. */
   reservedSlugs?: ReadonlySet<string>;
+  /**
+   * Where invitation tokens are delivered. Without one, `invitations.invite`
+   * and `.resend` still return the token for you to deliver yourself.
+   */
+  invitationMailer?: InvitationMailer;
+  /** Default invitation lifetime; seven days unless set. Per-call `ttlMs` wins. */
+  invitationTtlMs?: number;
+}
+
+/** The invitation workflow, namespaced on the instance. */
+export interface TenancyInvitations {
+  /** Issue; the returned `token` is available exactly once. */
+  invite(input: InviteInput): Promise<{ invitation: Invitation; token: string }>;
+  /** Token → membership. Idempotent for the same user. */
+  accept(input: { token: string; userId: UserId }): Promise<{
+    invitation: Invitation;
+    membership: Membership;
+  }>;
+  get(id: string): Promise<Invitation>;
+  list(tenantId: TenantId, query?: { state?: InvitationState }): Promise<Invitation[]>;
+  revoke(id: string): Promise<Invitation>;
+  /** Fresh token, fresh expiry, old token dead. */
+  resend(id: string): Promise<{ invitation: Invitation; token: string }>;
+  /** Mark timed-out pending invitations expired; returns how many. */
+  sweepExpired(): Promise<number>;
 }
 
 export interface Tenancy {
@@ -127,12 +165,16 @@ export interface Tenancy {
    *  for it reads as the deliberate act it should be: administrative queries,
    *  cross-tenant reports, the resolve path itself. */
   unscopedDb(): SqlExecutor;
+
+  // invitations
+  invitations: TenancyInvitations;
 }
 
 export function createTenancy(options: TenancyOptions): Tenancy {
   const { db, reservedSlugs } = options;
   const clock: Clock = options.clock ?? (() => new Date());
   const scope = new TenantScope();
+  const invitationOptions = { mailer: options.invitationMailer, ttlMs: options.invitationTtlMs };
 
   return {
     createTenant: (input) => createTenant(db, input, clock(), reservedSlugs),
@@ -164,5 +206,15 @@ export function createTenancy(options: TenancyOptions): Tenancy {
       return scope.run(s, () => scopedExecutor(db, tenantId).transaction(fn));
     },
     unscopedDb: () => db,
+
+    invitations: {
+      invite: (input) => invite(db, input, clock(), invitationOptions),
+      accept: (input) => acceptInvitation(db, input, clock()),
+      get: (id) => getInvitation(db, id, clock()),
+      list: (tenantId, query) => listInvitations(db, tenantId, clock(), query),
+      revoke: (id) => revokeInvitation(db, id, clock()),
+      resend: (id) => resendInvitation(db, id, clock(), invitationOptions),
+      sweepExpired: () => sweepExpiredInvitations(db, clock()),
+    },
   };
 }

@@ -129,6 +129,56 @@ export interface AddMemberInput {
   role: Role;
 }
 
+// --- invitations ------------------------------------------------------------
+
+export type InvitationState = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export interface Invitation {
+  id: string;
+  tenantId: TenantId;
+  /** Lower-cased at issue. What the invitation was sent to — not verified
+   *  against the accepting user, since users are opaque here. */
+  email: string;
+  role: Role;
+  invitedBy: UserId;
+  state: InvitationState;
+  createdAt: Date;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+  acceptedBy: UserId | null;
+  revokedAt: Date | null;
+}
+
+export interface InviteInput {
+  tenantId: TenantId;
+  email: string;
+  role: Role;
+  invitedBy: UserId;
+  /** How long the token is valid. Defaults to seven days. */
+  ttlMs?: number;
+}
+
+/**
+ * What the mailer seam receives: enough to write the email — the tenant by
+ * name, the invitation, and the clear-text token, which exists in memory only
+ * for this call. `kind` distinguishes a first send from a `resend`.
+ */
+export interface InvitationMessage {
+  kind: 'invite' | 'resend';
+  tenant: Tenant;
+  invitation: Invitation;
+  token: string;
+}
+
+/**
+ * The seam between issuing an invitation and delivering it. tenant-kit
+ * never sends mail; it hands the message to whatever you plug in here — a
+ * mail-kit `send`, a queue, or the memory collector the tests use. Called
+ * after the invitation is committed, so a delivery failure leaves an
+ * invitation you can `resend`.
+ */
+export type InvitationMailer = (message: InvitationMessage) => Promise<void>;
+
 // --- resolution -------------------------------------------------------------
 
 /**

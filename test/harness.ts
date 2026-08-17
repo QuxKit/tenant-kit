@@ -34,6 +34,9 @@ export const SKIP_REASON =
   `no database at ${TEST_DATABASE_URL} — set TENANT_KIT_TEST_DATABASE_URL or ` +
   'run: createdb tenant_kit_test';
 
+/** Every shipped migration, in order. Add new files here as they land. */
+export const SQL_FILES = ['001_core.sql', '002_rls.sql', '003_invitations.sql'];
+
 export interface Harness {
   db: SqlExecutor;
   pool: pg.Pool;
@@ -74,7 +77,7 @@ export async function setupDatabase(): Promise<Harness | null> {
   if (pool === null) return null;
 
   await pool.query('DROP SCHEMA IF EXISTS tenancy CASCADE');
-  for (const file of ['001_core.sql', '002_rls.sql']) {
+  for (const file of SQL_FILES) {
     const path = fileURLToPath(new URL(`../sql/${file}`, import.meta.url));
     await pool.query(await readFile(path, 'utf8'));
   }

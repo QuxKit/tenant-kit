@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Invitations (`sql/003_invitations.sql`, `tenancy.invitations.*` and the
+  free functions `invite` / `acceptInvitation` / `revokeInvitation` /
+  `listInvitations` / `resendInvitation` / `sweepExpiredInvitations`):
+  tokens are random, returned once and stored as sha256; `accept` is
+  idempotent for the accepting user and typed for everyone else
+  (`invitation_taken`, `invitation_expired`, `invitation_revoked`,
+  `unknown_invitation`); one pending invitation per (tenant, email);
+  `InvitationMailer` seam (`invitationMailer` option) with
+  `memoryInvitationMailer()` for tests; expiry sweep.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only

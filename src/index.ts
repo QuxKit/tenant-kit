@@ -4,7 +4,24 @@
 export { TenantScope } from './context.ts';
 
 export { TenancyError, type TenancyErrorCode, type TenancyFailure } from './errors.ts';
-export { createTenancy, type Tenancy, type TenancyOptions } from './instance.ts';
+export {
+  createTenancy,
+  type Tenancy,
+  type TenancyInvitations,
+  type TenancyOptions,
+} from './instance.ts';
+export {
+  acceptInvitation,
+  DEFAULT_INVITATION_TTL_MS,
+  getInvitation,
+  hashInvitationToken,
+  invite,
+  listInvitations,
+  memoryInvitationMailer,
+  resendInvitation,
+  revokeInvitation,
+  sweepExpiredInvitations,
+} from './invitations.ts';
 export {
   type RoutedExecutor,
   type RoutedExecutorOptions,
@@ -49,6 +66,11 @@ export type {
   Clock,
   CreateTenantInput,
   Extractor,
+  Invitation,
+  InvitationMailer,
+  InvitationMessage,
+  InvitationState,
+  InviteInput,
   Logger,
   Membership,
   RequestLike,
