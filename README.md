@@ -252,6 +252,42 @@ The free functions (`invite`, `acceptInvitation`, `revokeInvitation`,
 `listInvitations`, `resendInvitation`, `sweepExpiredInvitations`) take
 `(db, …, now)` like everything else.
 
+## Schema-per-tenant provisioning and erasure
+
+The two edges of a tenant's life that touch DDL:
+
+```ts
+// Give a tenant its own schema (tenant_<slug>), and keep it migrated:
+await tenancy.provisionSchema(tenantId, {
+  migrations: [
+    `CREATE TABLE projects (id serial PRIMARY KEY, name text NOT NULL)`,
+    `ALTER TABLE projects ADD COLUMN done boolean NOT NULL DEFAULT false`,
+  ],
+});
+// Idempotent: each entry runs once per schema (bookkept in
+// <schema>.tenancy_migrations by index — append, never edit). Migrations run
+// with search_path set to the tenant schema, in one transaction with the
+// CREATE SCHEMA, so a failing migration provisions nothing. Pair it with
+// routedExecutor for the routing side; tenantSchemaName(tenant) is the name.
+
+// And erase a tenant for good — archive first, always:
+await tenancy.archiveTenant(tenantId);
+await tenancy.as('gdpr-bot').eraseTenant(tenantId, {
+  tables: ['public.notes', 'public.files'],          // assemble next to coverage()
+  tenantColumn: { 'public.files': 'org_id' },        // default tenant_id
+});
+// -> { deleted: { 'public.notes': 2, 'public.files': 1 }, droppedSchema: 'tenant_acme' }
+```
+
+`eraseTenant` refuses an active tenant (`tenant_not_archived` — erasure is
+two deliberate steps), then in **one transaction** deletes the tenant's rows
+from every registered table, its memberships / invitations / custom roles /
+unacked events, and drops `tenant_<slug>` (`dropSchema: false` keeps it).
+The tenants row survives as an archived tombstone — ledgers and audit logs
+reference the id — and the audit log records `tenant_erased`, by whom, with
+the per-table counts. The table list is an argument, not a guess: build it
+from the same inventory `coverage()` audits.
+
 ## Framework helpers
 
 `./express`, `./hono` and `./next` are thin wrappers over the same glue —
@@ -404,7 +440,7 @@ for (;;) {
 ```
 
 Event types: `tenant_created` / `tenant_renamed` / `tenant_archived` /
-`tenant_restored`, `settings_patched`, `member_added` / `member_role_changed` /
+`tenant_restored`, `settings_patched`, `schema_provisioned`, `tenant_erased`, `member_added` / `member_role_changed` /
 `member_removed`, `invitation_issued` / `invitation_accepted` /
 `invitation_revoked` (`superseded: true` when a re-invite replaced it) /
 `invitation_resent` / `invitation_expired`, `role_defined` /
@@ -463,6 +499,7 @@ Every failure is a `TenancyError` whose `failure.code` is one of:
 | `unknown_tenant` | lookups, `authorize` | no tenant for `ref` |
 | `tenant_archived` | `authorize`, `resolve` | the tenant exists but is archived |
 | `settings_too_large` | `patchSettings` | the merged document would be `bytes` > `maxBytes`; nothing written |
+| `tenant_not_archived` | `eraseTenant` | archive first; erasure is a two-step act |
 | `invalid_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | malformed name; or (`roles.*`) reserved, or defined differently (`reason`) |
 | `unknown_role` | `addMember`, `setRole`, `invitations.invite`, `roles.*` | not built-in and not defined for this tenant |
 | `role_in_use` | `roles.delete` | `members` / `invitations` still name it |

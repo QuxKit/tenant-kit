@@ -14,6 +14,9 @@ describeDb('coverage', admin, (admin) => {
   let app: Harness;
 
   before(async () => {
+    // Tables another test file leaves in public (physical.test.ts) would
+    // otherwise show up in the report on the next run.
+    await admin.pool.query('DROP TABLE IF EXISTS public.notes, public.files');
     const role = await setupAppRole(admin);
     if (role === null) throw new Error('the app role could not connect; see setupAppRole');
     app = role;

@@ -73,6 +73,15 @@ export {
   tenantsOf,
 } from './members.ts';
 export {
+  type EraseTenantOptions,
+  type ErasureReport,
+  eraseTenant,
+  type ProvisionedSchema,
+  type ProvisionSchemaOptions,
+  provisionSchema,
+  tenantSchemaName,
+} from './physical.ts';
+export {
   authorize,
   firstOf,
   fromClaim,

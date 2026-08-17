@@ -102,6 +102,17 @@ partially), and **connection budgets** (every isolated tenant is a pool;
 Postgres connections are not free). Those are operational decisions with
 your name on the pager, not defaults a library should pick.
 
+For the schema-per-tenant middle, `provisionSchema(db, tenantId,
+{ migrations })` does carry the mechanical part: it creates
+`tenant_<slug>` (see `tenantSchemaName`) and applies your migration list
+idempotently — each entry once per schema, bookkept by index in
+`<schema>.tenancy_migrations`, `search_path` pinned to the tenant schema,
+the whole thing in one transaction so a failed migration provisions
+nothing. Which migrations, and when to fan them out, remains yours. At the
+other end, `eraseTenant` (see the README) is the supported path from
+"archived" to "their rows are gone" — shared tables, directory rows and the
+tenant schema, in one transaction, tombstone retained.
+
 What the library does guarantee: the routing function is consulted once per
 tenant while its executor is cached, the executor is reused, evicted
 executors are handed to `dispose` (end the pool there), and everything downstream — including
