@@ -8,3 +8,5 @@ build/
 .DS_Store
 *.tsbuildinfo
 coverage/
+examples/*/node_modules/
+examples/*/pnpm-lock.yaml
