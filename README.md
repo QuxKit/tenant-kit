@@ -252,6 +252,81 @@ The free functions (`invite`, `acceptInvitation`, `revokeInvitation`,
 `listInvitations`, `resendInvitation`, `sweepExpiredInvitations`) take
 `(db, …, now)` like everything else.
 
+## Framework helpers
+
+`./express`, `./hono` and `./next` are thin wrappers over the same glue —
+authenticated user → `resolve` → role/permission check → handler inside
+`withTenant` — typed against minimal local interfaces, with **no runtime or
+type dependency** on any framework (they are optional peers only so your
+package manager understands the pairing). The failure mapping is decided
+once and shared: 401 unauthenticated, 400 no claim, **404 for
+`unknown_tenant`, `not_a_member` and `tenant_archived` alike** (whether a
+tenant exists is information), 403 `forbidden` / `permission_denied`.
+Override it with `onFailure`; non-tenancy errors always reach the
+framework's own error handling.
+
+Common options: `{ tenancy, extract, userId(req), requireRole?,
+requirePermission?, onFailure? }`. `userId` is your auth layer's verdict —
+a session lookup, a token check — never something read from the body.
+
+### Express
+
+```ts
+import { tenantMiddleware, tenantHandler } from '@quxkit/tenant-kit/express';
+
+const options = {
+  tenancy,
+  extract: fromSubdomain({ baseDomain: 'example.com' }),
+  userId: (req) => req.user?.id ?? null,   // your auth middleware ran first
+};
+
+// Ambient context for a whole router: req.tenant + tenancy.db() work downstream.
+app.use('/app', tenantMiddleware(options));
+
+// Or one transaction per route: ctx.db is the scoped executor.
+app.get('/notes', tenantHandler(options, async (req, res, ctx) => {
+  res.json(await ctx.db.query('SELECT * FROM notes'));
+}));
+```
+
+The middleware scopes *context* (no transaction — Express cannot tell it
+when the response is done); `tenantHandler` scopes a *transaction* around
+one handler. Pick per route.
+
+### Hono
+
+```ts
+import { tenantMiddleware } from '@quxkit/tenant-kit/hono';
+
+app.use('/app/*', tenantMiddleware({ tenancy, extract, userId: (c) => c.get('userId') }));
+app.get('/app/notes', async (c) => {
+  const db = c.get('tenantDb');           // scoped; the whole handler is one transaction
+  return c.json(await db.query('SELECT * FROM notes'));
+});
+```
+
+Hono middleware awaits `next()`, so the one transaction covers the whole
+downstream handler.
+
+### Next.js (App Router — and anything fetch-shaped)
+
+```ts
+// app/api/notes/route.ts
+import { withTenant } from '@quxkit/tenant-kit/next';
+
+export const GET = withTenant(
+  { tenancy, extract, userId: (req) => auth(req) },
+  async (req, ctx, { params }) => Response.json(await ctx.db.query('SELECT * FROM notes')),
+);
+```
+
+`NextRequest` is a `Request`; the wrapper needs nothing from `next` itself,
+so the same helper serves Remix loaders and other fetch-API runtimes.
+
+For anything else, `resolveForRequest` (exported from the root) is the
+shared core: build a `RequestLike`, get back either `{ resolved }` or a
+mapped `{ status, body }`.
+
 ## Roles and permissions
 
 The three built-ins are implied — no row, not deletable, not redefinable —

@@ -23,6 +23,14 @@ export {
   type TenancyEventType,
 } from './events.ts';
 export {
+  defaultFailureResponse,
+  type HttpFailure,
+  type HttpFailureResponse,
+  type ResolveOutcome,
+  resolveForRequest,
+  type TenantHttpOptions,
+} from './framework/http.ts';
+export {
   createTenancy,
   type Tenancy,
   type TenancyAudit,
