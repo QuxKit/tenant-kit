@@ -38,6 +38,13 @@ export const TENANT_SETTING = 'tenancy.tenant_id';
  * The tenant id itself travels as a bind parameter into `set_config`, never
  * into SQL text — a tenant id is caller-adjacent data and gets the same
  * injection discipline as any other string.
+ *
+ * A `transaction` opened *inside* a scoped transaction is a savepoint on the
+ * same connection: the inner body's failure rolls back only the inner work,
+ * and the scope — which belongs to the outer transaction — is untouched. The
+ * savepoints are issued here, not delegated to the underlying executor's
+ * nested `transaction`, because that contract does not promise savepoints
+ * and this one does.
  */
 export function scopedExecutor(db: SqlExecutor, tenantId: TenantId): SqlExecutor {
   if (tenantId.length === 0) throw new TenancyError({ code: 'no_tenant_context' });
@@ -53,13 +60,33 @@ export function scopedExecutor(db: SqlExecutor, tenantId: TenantId): SqlExecutor
     transaction: (fn) =>
       db.transaction(async (tx) => {
         await enter(tx);
-        const scoped: SqlExecutor = {
-          query: (text, params) => tx.query(text, params),
-          transaction: (inner) => inner(scoped),
-        };
-        return fn(scoped);
+        return fn(nested(tx, 0));
       }),
   };
+}
+
+/**
+ * The executor handed to a scoped transaction body: raw statements on the
+ * already-scoped connection, and savepoint-backed nested transactions.
+ * Savepoint names come from a depth counter, never from caller input.
+ */
+function nested(tx: SqlExecutor, depth: number): SqlExecutor {
+  const scoped: SqlExecutor = {
+    query: (text, params) => tx.query(text, params),
+    transaction: async (inner) => {
+      const name = `tenancy_scope_sp_${depth + 1}`;
+      await tx.query(`SAVEPOINT ${name}`);
+      try {
+        const out = await inner(nested(tx, depth + 1));
+        await tx.query(`RELEASE SAVEPOINT ${name}`);
+        return out;
+      } catch (error) {
+        await tx.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        throw error;
+      }
+    },
+  };
+  return scoped;
 }
 
 /**

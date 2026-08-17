@@ -9,7 +9,8 @@
 // `transaction` pins the body to one connection. That matters more here than
 // in most libraries: `SET LOCAL` on the wrong connection is not a rollback
 // bug but an isolation bug — the tenant scope lands on one connection while
-// the queries run unscoped on another.
+// the queries run unscoped on another. Nested `transaction` calls become
+// savepoints, so a caught inner failure does not poison the outer one.
 
 import type { Pool, PoolClient } from 'pg';
 
@@ -21,13 +22,35 @@ export type PgPoolLike = Pick<Pool, 'query' | 'connect'>;
 /** The subset of `pg.PoolClient` used inside a transaction. */
 type PgClientLike = Pick<PoolClient, 'query' | 'release'>;
 
-function boundTo(client: PgClientLike): SqlExecutor {
+/**
+ * A `SqlExecutor` bound to one checked-out client. `transaction` here is a
+ * *nested* transaction: it opens a savepoint, runs the body, and releases or
+ * rolls back to that savepoint — so an inner failure undoes only the inner
+ * work and the outer transaction carries on. Flattening (running the inner
+ * body on the same connection with no savepoint) would make "the inner call
+ * failed but I caught it" leave the outer transaction in an aborted state.
+ *
+ * Savepoint names are generated from a depth counter, never from caller
+ * input, so they cannot carry anything into the SQL text.
+ */
+function boundTo(client: PgClientLike, depth = 0): SqlExecutor {
   const bound: SqlExecutor = {
     async query<R>(text: string, params?: readonly unknown[]): Promise<R[]> {
       const result = await client.query(text, params as unknown[]);
       return result.rows as R[];
     },
-    transaction: (inner) => inner(bound),
+    async transaction<T>(inner: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+      const name = `tenancy_sp_${depth + 1}`;
+      await client.query(`SAVEPOINT ${name}`);
+      try {
+        const out = await inner(boundTo(client, depth + 1));
+        await client.query(`RELEASE SAVEPOINT ${name}`);
+        return out;
+      } catch (error) {
+        await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        throw error;
+      }
+    },
   };
   return bound;
 }
