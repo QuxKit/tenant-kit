@@ -65,6 +65,7 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 'test/**/*.test.ts'",
+    "test:coverage": "c8 --check-coverage tsx --test --test-concurrency=1 'test/**/*.test.ts'",
     "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
   },
   "publishConfig": {
