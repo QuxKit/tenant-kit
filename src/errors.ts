@@ -30,6 +30,8 @@ export type TenancyFailure =
   | { code: 'tenant_archived'; tenantId: TenantId }
   /** The merged settings document would exceed the cap. Nothing was written. */
   | { code: 'settings_too_large'; tenantId: TenantId; bytes: number; maxBytes: number }
+  /** `eraseTenant` on an active tenant. Archive first; erasure is two steps on purpose. */
+  | { code: 'tenant_not_archived'; tenantId: TenantId }
 
   // --- membership ----------------------------------------------------------
   /** Not a role name this tenant knows: not built-in and not defined here,
@@ -87,6 +89,8 @@ function describe(failure: TenancyFailure): string {
       return `tenant ${failure.tenantId} is archived`;
     case 'settings_too_large':
       return `settings for tenant ${failure.tenantId} would be ${failure.bytes} bytes; the cap is ${failure.maxBytes}`;
+    case 'tenant_not_archived':
+      return `tenant ${failure.tenantId} is not archived; archive it before erasing`;
     case 'invalid_role':
       return (
         `not a role: ${JSON.stringify(failure.role)}` +

@@ -23,6 +23,8 @@ export type TenancyEventType =
   | 'tenant_archived'
   | 'tenant_restored'
   | 'settings_patched'
+  | 'schema_provisioned'
+  | 'tenant_erased'
   | 'member_added'
   | 'member_role_changed'
   | 'member_removed'

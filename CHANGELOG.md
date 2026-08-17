@@ -56,6 +56,15 @@ adheres to [Semantic Versioning](https://semver.org/).
   (`defaultFailureResponse`, overridable via `onFailure`): 401 / 400 / 404
   (existence-hiding) / 403. `resolveForRequest` exported for other
   frameworks.
+- Physical isolation helpers: `provisionSchema(db, tenantId, { migrations })`
+  creates `tenant_<slug>` and applies migration SQL idempotently (bookkept
+  per schema in `tenancy_migrations`, `search_path` set to the tenant
+  schema, all in one transaction); `eraseTenant(db, tenantId, { tables,
+  tenantColumn, dropSchema })` hard-deletes an **archived** tenant's rows
+  across the registered tables plus its directory rows and schema, in one
+  transaction, leaving the tenants row as a tombstone and a `tenant_erased`
+  audit entry; typed `tenant_not_archived`; `tenantSchemaName` exported;
+  events `schema_provisioned` / `tenant_erased`.
 - `@quxkit/tenant-kit/pg`: the shipped `pg.Pool` adapter (`pgExecutor`), with
   `pg` as an optional peer dependency. Nested `transaction()` calls use
   `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`, so an inner failure rolls back only

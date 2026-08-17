@@ -46,6 +46,14 @@ import {
   setRole,
   tenantsOf,
 } from './members.ts';
+import {
+  type EraseTenantOptions,
+  type ErasureReport,
+  eraseTenant,
+  type ProvisionedSchema,
+  type ProvisionSchemaOptions,
+  provisionSchema,
+} from './physical.ts';
 import { authorize, resolve } from './resolve.ts';
 import {
   can,
@@ -180,6 +188,10 @@ export interface Tenancy {
   renameTenant(id: TenantId, name: string): Promise<Tenant>;
   archiveTenant(id: TenantId): Promise<Tenant>;
   restoreTenant(id: TenantId): Promise<Tenant>;
+  /** Create/extend `tenant_<slug>` and apply new migrations. Idempotent. */
+  provisionSchema(id: TenantId, options: ProvisionSchemaOptions): Promise<ProvisionedSchema>;
+  /** Hard-delete an *archived* tenant's rows (and schema). `tenant_not_archived` otherwise. */
+  eraseTenant(id: TenantId, options: EraseTenantOptions): Promise<ErasureReport>;
   getSettings(id: TenantId): Promise<Settings>;
   /** JSON merge patch (RFC 7396): objects merge, `null` deletes, else replaces. */
   patchSettings(id: TenantId, patch: Settings): Promise<Settings>;
@@ -290,6 +302,8 @@ function build(
     renameTenant: (id, name) => renameTenant(db, id, name, clock(), meta()),
     archiveTenant: (id) => archiveTenant(db, id, clock(), meta()),
     restoreTenant: (id) => restoreTenant(db, id, clock(), meta()),
+    provisionSchema: (id, opts) => provisionSchema(db, id, opts, clock(), meta()),
+    eraseTenant: (id, opts) => eraseTenant(db, id, opts, clock(), meta()),
     getSettings: (id) => getSettings(db, id),
     patchSettings: (id, patch) =>
       patchSettings(db, id, patch, clock(), { maxBytes: options.settingsMaxBytes }, meta()),
