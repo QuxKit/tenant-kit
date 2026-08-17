@@ -27,7 +27,7 @@ Multi-tenancy as a library, for the app you already run.
 
 _Rendered diagrams (mermaid): [docs/DIAGRAMS.md](https://github.com/QuxKit/tenant-kit/blob/main/docs/DIAGRAMS.md)._
 
-tenant-kit owns the teal boxes: what a tenant **is** (a directory of tenants
+tenant-kit owns the framed column: what a tenant **is** (a directory of tenants
 and memberships), how a request **becomes** one (extraction, then
 authorization — never one without the other), how the current tenant travels
 through your code (AsyncLocalStorage), and how the database refuses to serve
