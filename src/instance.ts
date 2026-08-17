@@ -31,6 +31,7 @@ import { authorize, resolve } from './resolve.ts';
 import {
   archiveTenant,
   createTenant,
+  createTenantWithOwner,
   getTenant,
   getTenantBySlug,
   listTenants,
@@ -66,7 +67,12 @@ export interface TenancyOptions {
 
 export interface Tenancy {
   // tenants
+  /** With `input.owner`, tenant and first owner land in one transaction. */
   createTenant(input: CreateTenantInput): Promise<Tenant>;
+  /** The signup shape: tenant + owner membership, atomically. */
+  createTenantWithOwner(
+    input: CreateTenantInput & { owner: UserId },
+  ): Promise<{ tenant: Tenant; membership: Membership }>;
   getTenant(id: TenantId): Promise<Tenant>;
   getTenantBySlug(slug: string): Promise<Tenant>;
   listTenants(query?: { state?: Tenant['state'] }): Promise<Tenant[]>;
@@ -114,6 +120,7 @@ export function createTenancy(options: TenancyOptions): Tenancy {
 
   return {
     createTenant: (input) => createTenant(db, input, clock(), reservedSlugs),
+    createTenantWithOwner: (input) => createTenantWithOwner(db, input, clock(), reservedSlugs),
     getTenant: (id) => getTenant(db, id),
     getTenantBySlug: (slug) => getTenantBySlug(db, slug),
     listTenants: (query) => listTenants(db, query),

@@ -94,6 +94,14 @@ export interface CreateTenantInput {
   name: string;
   /** Supplied for migrations importing existing ids; generated otherwise. */
   id?: TenantId;
+  /**
+   * The first owner. When given, the tenant and its owner membership are
+   * inserted in one transaction, so no committed state ever has a tenant with
+   * zero owners. Omitting it is for imports and migrations that carry their
+   * own membership rows; a tenant created without an owner cannot be
+   * administered until `addMember(..., 'owner')` runs.
+   */
+  owner?: UserId;
 }
 
 // --- membership -------------------------------------------------------------

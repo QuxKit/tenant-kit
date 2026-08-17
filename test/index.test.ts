@@ -19,6 +19,7 @@ const EXPECTED = [
   'authorize',
   'createTenancy',
   'createTenant',
+  'createTenantWithOwner',
   'firstOf',
   'fromClaim',
   'fromHeader',

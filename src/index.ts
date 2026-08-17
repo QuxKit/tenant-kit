@@ -29,6 +29,7 @@ export {
 export {
   archiveTenant,
   createTenant,
+  createTenantWithOwner,
   getTenant,
   getTenantBySlug,
   listTenants,

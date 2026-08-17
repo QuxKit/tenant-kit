@@ -7,7 +7,14 @@
 
 import { randomUUID } from 'node:crypto';
 import { TenancyError } from './errors.ts';
-import type { CreateTenantInput, SqlExecutor, Tenant, TenantId } from './types.ts';
+import type {
+  CreateTenantInput,
+  Membership,
+  SqlExecutor,
+  Tenant,
+  TenantId,
+  UserId,
+} from './types.ts';
 
 // --- slugs ------------------------------------------------------------------
 
@@ -86,6 +93,11 @@ const SELECT = `SELECT id, slug, name, state, created_at, archived_at
  * Race-safe via `ON CONFLICT DO NOTHING` + re-select, not read-then-insert:
  * two concurrent creates of one slug both land here, one inserts, both then
  * read the same winning row and judge it against their own input.
+ *
+ * With `input.owner` set this delegates to `createTenantWithOwner`, so the
+ * tenant and its first owner land in one transaction. Without it, the tenant
+ * has no owner until `addMember` runs — the shape for imports and migrations
+ * that bring their own membership rows, and not the one for a signup flow.
  */
 export async function createTenant(
   db: SqlExecutor,
@@ -93,10 +105,26 @@ export async function createTenant(
   now: Date,
   reserved?: ReadonlySet<string>,
 ): Promise<Tenant> {
+  if (input.owner !== undefined) {
+    const { tenant } = await createTenantWithOwner(
+      db,
+      { ...input, owner: input.owner },
+      now,
+      reserved,
+    );
+    return tenant;
+  }
   validateSlug(input.slug, reserved);
   if (input.name.trim().length === 0)
     throw new TenancyError({ code: 'invalid_tenant', field: 'name', reason: 'empty' });
+  return (await insertTenant(db, input, now)).tenant;
+}
 
+async function insertTenant(
+  db: SqlExecutor,
+  input: CreateTenantInput,
+  now: Date,
+): Promise<{ tenant: Tenant; created: boolean }> {
   const id = input.id ?? randomUUID();
   const inserted = await db.query<TenantRow>(
     `INSERT INTO tenancy.tenants (id, slug, name, state, created_at)
@@ -105,10 +133,11 @@ export async function createTenant(
      RETURNING id, slug, name, state, created_at, archived_at`,
     [id, input.slug, input.name, now],
   );
-  if (inserted.length === 1) return toTenant(inserted[0]);
+  if (inserted.length === 1) return { tenant: toTenant(inserted[0]), created: true };
 
   const existing = await getTenantBySlug(db, input.slug);
-  if (existing.name === input.name && existing.state === 'active') return existing;
+  if (existing.name === input.name && existing.state === 'active')
+    return { tenant: existing, created: false };
   throw new TenancyError({
     code: 'slug_taken',
     slug: input.slug,
@@ -117,6 +146,74 @@ export async function createTenant(
         ? `existing tenant is ${existing.state}`
         : `existing tenant is named ${JSON.stringify(existing.name)}, not ${JSON.stringify(input.name)}`,
   });
+}
+
+/**
+ * Create a tenant and its first owner in one transaction.
+ *
+ * This is the signup-flow shape: no committed state ever holds a tenant with
+ * zero owners, so a crash between "create tenant" and "add owner" cannot
+ * leave a tenant nobody can administer. Idempotent on an exact retry — same
+ * slug, same name, same owner — which returns the existing pair. A retry that
+ * names a *different* owner for an existing tenant is `slug_taken`: granting
+ * ownership of someone else's tenant is not what a create means, and the
+ * caller who wants that goes through `addMember` under the owner's authority.
+ *
+ * The membership insert is written out here rather than calling `addMember`
+ * because members.ts imports this module for `toTenant`; the SQL is the same
+ * ON CONFLICT DO NOTHING shape and lives in the same transaction.
+ */
+export async function createTenantWithOwner(
+  db: SqlExecutor,
+  input: CreateTenantInput & { owner: UserId },
+  now: Date,
+  reserved?: ReadonlySet<string>,
+): Promise<{ tenant: Tenant; membership: Membership }> {
+  validateSlug(input.slug, reserved);
+  if (input.name.trim().length === 0)
+    throw new TenancyError({ code: 'invalid_tenant', field: 'name', reason: 'empty' });
+  if (input.owner.trim().length === 0)
+    throw new TenancyError({ code: 'invalid_tenant', field: 'owner', reason: 'empty' });
+
+  return db.transaction(async (tx) => {
+    const { tenant, created } = await insertTenant(tx, input, now);
+    const rows = created
+      ? await tx.query<MembershipRowLite>(
+          `INSERT INTO tenancy.memberships (tenant_id, user_id, role, created_at)
+           VALUES ($1, $2, 'owner', $3)
+           RETURNING tenant_id, user_id, role, created_at`,
+          [tenant.id, input.owner, now],
+        )
+      : await tx.query<MembershipRowLite>(
+          `SELECT tenant_id, user_id, role, created_at FROM tenancy.memberships
+            WHERE tenant_id = $1 AND user_id = $2 AND role = 'owner'`,
+          [tenant.id, input.owner],
+        );
+    if (rows.length === 0)
+      throw new TenancyError({
+        code: 'slug_taken',
+        slug: input.slug,
+        detail: `existing tenant does not have ${input.owner} as an owner`,
+      });
+    const row = rows[0];
+    return {
+      tenant,
+      membership: {
+        tenantId: row.tenant_id,
+        userId: row.user_id,
+        role: 'owner',
+        createdAt: row.created_at,
+      },
+    };
+  });
+}
+
+/** The membership row shape, redeclared here to keep this module free of members.ts. */
+interface MembershipRowLite {
+  tenant_id: string;
+  user_id: string;
+  role: string;
+  created_at: Date;
 }
 
 export async function getTenant(db: SqlExecutor, id: TenantId): Promise<Tenant> {
