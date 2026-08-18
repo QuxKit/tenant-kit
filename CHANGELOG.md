@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-17
+
 ### Added
 - Invitations (`sql/003_invitations.sql`, `tenancy.invitations.*` and the
   free functions `invite` / `acceptInvitation` / `revokeInvitation` /
