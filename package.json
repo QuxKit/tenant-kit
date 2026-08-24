@@ -1,6 +1,7 @@
 {
   "name": "@quxkit/tenant-kit",
   "version": "0.2.0",
+  "packageManager": "pnpm@11.20.0",
   "description": "Multi-tenancy as a library \u2014 tenant identity, membership, resolution and isolation for the app you already run.",
   "license": "Apache-2.0",
   "author": "BRETT",
@@ -27,7 +28,7 @@
     "typescript"
   ],
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.13.0"
   },
   "exports": {
     ".": {
