@@ -59,5 +59,17 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Coverage is a property of the code, not of the runtime, so it is
+      # measured once. V8 attributes FUNCTION coverage differently between Node
+      # 22 and 24 — on identical commits and identical passing tests, functions
+      # differ by up to five points while statements and lines agree to two
+      # decimals. Enforcing the threshold on both makes the gate a report on
+      # whichever V8 ran, not on the tests. It runs on the newest, which is also
+      # what contributors see locally.
       - name: Test (with coverage)
+        if: matrix.node == 24
         run: pnpm test:coverage
+
+      - name: Test
+        if: matrix.node != 24
+        run: pnpm test
