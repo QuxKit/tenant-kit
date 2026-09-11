@@ -1,8 +1,8 @@
 {
   "name": "@quxkit/tenant-kit",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packageManager": "pnpm@11.20.0",
-  "description": "Multi-tenancy as a library \u2014 tenant identity, membership, resolution and isolation for the app you already run.",
+  "description": "Multi-tenancy as a library — tenant identity, membership, resolution and isolation for the app you already run.",
   "license": "Apache-2.0",
   "author": "QuxKit.AI (https://quxkit.ai)",
   "type": "module",
@@ -11,7 +11,7 @@
     "type": "git",
     "url": "git+https://github.com/QuxKit/tenant-kit.git"
   },
-  "homepage": "https://github.com/QuxKit/tenant-kit#readme",
+  "homepage": "https://quxkit.ai",
   "bugs": {
     "url": "https://github.com/QuxKit/tenant-kit/issues"
   },
