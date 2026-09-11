@@ -4,7 +4,7 @@
   "packageManager": "pnpm@11.20.0",
   "description": "Multi-tenancy as a library \u2014 tenant identity, membership, resolution and isolation for the app you already run.",
   "license": "Apache-2.0",
-  "author": "BRETT",
+  "author": "QuxKit.AI (https://quxkit.ai)",
   "type": "module",
   "sideEffects": false,
   "repository": {
